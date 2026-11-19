@@ -73,6 +73,18 @@ policy_name="${group_name}-read"
 volume_policy_name="${group_name}-volumes"
 matching_rule="instance.id = '$instance_id'"
 
+matches_instance_only() {
+  local rule=$1
+  local wrapper='^[[:space:]]*([Aa][Nn][Yy]|[Aa][Ll][Ll])[[:space:]]*[{](.*)[}][[:space:]]*$'
+  local condition="^[[:space:]]*instance[.]id[[:space:]]*=[[:space:]]*'([^']+)'[[:space:]]*$"
+
+  # A one-condition wrapper has the same membership as the bare condition.
+  if [[ "$rule" =~ $wrapper ]]; then
+    rule=${BASH_REMATCH[2]}
+  fi
+  [[ "$rule" =~ $condition && "${BASH_REMATCH[1]}" == "$instance_id" ]]
+}
+
 statements() {
   local subject="$1"
   printf 'Allow %s to read instance-family %s\n' "$subject" "$compute_scope"
@@ -124,8 +136,13 @@ if [[ "$group" == null ]]; then
     --description "OCI Lens instance principal" --matching-rule "$matching_rule" \
     --wait-for-state ACTIVE --wait-interval-seconds 5 --max-wait-seconds 120 --query 'data.id' --raw-output)"
 else
-  jq -e --arg rule "$matching_rule" '."matching-rule" == $rule and ."lifecycle-state" == "ACTIVE"' <<< "$group" >/dev/null ||
-    fail "同名动态组处于非活跃状态或匹配规则不同。请核对已有 IAM 配置。"
+  group_state="$(jq -r '."lifecycle-state" // "UNKNOWN"' <<< "$group")"
+  [[ "$group_state" == ACTIVE ]] ||
+    fail "同名动态组当前状态为 ${group_state}，请在 IAM 中确认状态达到 ACTIVE 后再试。"
+  existing_rule="$(jq -er '."matching-rule" | strings' <<< "$group")" ||
+    fail "OCI 未返回同名动态组的匹配规则，请在 IAM 中核对动态组。"
+  matches_instance_only "$existing_rule" ||
+    fail "同名动态组的规则与当前部署实例的单实例匹配范围不一致，请在 IAM 中核对匹配规则。"
   group_id="$(jq -r '.id' <<< "$group")"
 fi
 

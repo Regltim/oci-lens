@@ -30,6 +30,8 @@ ENV OCI_CONFIG_PROFILE=DEFAULT
 
 EXPOSE 9090
 
+LABEL org.oci-lens.admin-password-reset="1"
+
 USER monitor
 
 ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "/app/app.jar"]

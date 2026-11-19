@@ -32,6 +32,18 @@ public class AdminUserRepository {
     return users.stream().findFirst();
   }
 
+  Optional<AdminUser> findSingleAdmin() {
+    List<AdminUser> users = jdbcTemplate.query("""
+      SELECT id, username, password_hash, password_salt, created_at, updated_at
+      FROM admin_user
+      LIMIT 2
+      """, (resultSet, rowNum) -> mapUser(resultSet));
+    if (users.size() > 1) {
+      throw new IllegalArgumentException("数据库中有多个管理员，请通过 --username 指定当前账号名。");
+    }
+    return users.stream().findFirst();
+  }
+
   public AdminUser create(String username, String passwordHash, String passwordSalt) {
     String now = Instant.now().toString();
     AdminUser adminUser = new AdminUser(UUID.randomUUID().toString(), username, passwordHash, passwordSalt, now, now);

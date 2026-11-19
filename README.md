@@ -2,18 +2,34 @@
 
 面向单机自托管的 OCI 与本机监控台。界面采用顶部导航，可查看实例、主机、流量、费用和同步记录。浏览数据时只读取本地 SQLite 快照。
 
-## 启动
+## 部署与运维
 
-在装有 Docker Compose 的 Linux 主机执行以下命令。
+在装有 Docker、Compose、Python 3 和 OpenSSL 的 Linux 主机，从仓库目录运行以下命令。首次部署以及拉取新代码后都使用 `rebuild`。
 
 ```sh
-bash scripts/init-local.sh
-docker compose up --build -d --wait
+bash scripts/oci-lens.sh rebuild
 ```
 
-浏览器打开 `http://127.0.0.1:28462`。首次启动前可在 `.env` 设置 `MONITOR_ADMIN_USERNAME`，初始默认账号名为 `admin`，初始密码由初始化脚本生成到 `secrets/admin-password`。登录后可在「设置 → 账号」修改账号名和密码，容器重启继续使用数据卷中保存的凭据。远程使用时，通过 SSH 端口转发访问，或配置 HTTPS 反向代理并设置 `MONITOR_COOKIE_SECURE=true`。
+首次部署如需先调整配置，可运行 `bash scripts/oci-lens.sh init`，编辑 `.env` 后再重建。默认访问地址为 `http://127.0.0.1:28462`，初始账号为 `admin`。首次生成的密码保存在 `secrets/admin-password`。用「设置 → 账号」修改的账号和密码保存在 SQLite。启停和重建沿用同一数据卷，保留当前凭据。已有管理员且初始化文件缺失时，脚本补一个空文件供 Compose 挂载。
 
-登录页和顶部导航都可切换深浅主题，选择保存在当前浏览器。默认使用深色主题，顶部导航提供退出登录入口。
+```sh
+bash scripts/oci-lens.sh start
+bash scripts/oci-lens.sh status
+bash scripts/oci-lens.sh logs server
+bash scripts/oci-lens.sh doctor
+bash scripts/oci-lens.sh backup
+bash scripts/oci-lens.sh stop
+```
+
+`start` 使用已有镜像，`rebuild --no-cache` 可以忽略构建缓存。重建先构建镜像，再备份现有 SQLite 到 `backups/`，最后切换容器并等待健康检查。远程使用时，通过 SSH 转发访问，或配置 HTTPS 反向代理并设置 `MONITOR_COOKIE_SECURE=true`。
+
+### 忘记管理员密码
+
+部署过新版镜像后，在部署主机运行 `bash scripts/oci-lens.sh reset-password`，终端将隐藏输入并要求确认新密码。使用 `--generate` 可生成随机密码，脚本会打印权限为 `0600` 的密码文件路径。数据库有多个管理员时，用 `--username 当前账号名` 指定要重置的记录。
+
+脚本在写入前备份当前 SQLite，保留账号名和业务数据。此前运行的后端会在操作结束后恢复，已有登录会话随密码更新失效。网络接入、采集和迁移的配置继续使用当前部署的 `.env` 和卷。
+
+登录页和顶部导航支持深浅主题，选择保存在当前浏览器。
 
 ## 接入 OCI
 

@@ -27,6 +27,17 @@ OCI 采集范围有变化，或旧库没有足够的实例信息供工具核对�
 
 ## 同一主机上的 Docker Compose
 
+推荐使用统一运维脚本。目标 OCI Lens 需要先用新版启动过一次。
+
+```sh
+bash scripts/oci-lens.sh migrate-legacy --old-dir /path/to/oci-arm-monitor
+bash scripts/oci-lens.sh migrate-legacy --old-dir /path/to/oci-arm-monitor --apply
+```
+
+预检读取两边 SQLite 的一致性快照，两站可以继续运行。应用时脚本暂时停止新站后端，迁移完成或失败后恢复原运行状态。也可附加 `--manual-only` 或 `--host-only --host-label 原主机名`。导入结果和备份路径会显示在终端。
+
+### 手动执行 Compose 迁移
+
 把 `OLD_DIR` 设为旧站 Compose 所在目录。从新站目录运行，先读取两个实际卷名，再暂停后端。旧站的数据库文件名是 `oci-arm-cost-monitor.db`，新站是 `oci-lens.db`。
 
 ```sh

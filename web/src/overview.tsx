@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
-import { ArrowRight, RefreshCw, ShieldCheck } from "lucide-react"
+import { ArrowRight, RefreshCw } from "lucide-react"
 import { Button } from "@/components/glass/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/glass/table"
-import { request, useRead, type Choice, type CostSummary, type CoverageDay, type HostSummary, type InstanceOverview, type SyncRun, type SyncSchedule, type SyncStatus, type TrafficDay, type TrafficSummary } from "./api"
+import { request, useRead, type Choice, type CoverageDay, type HostSummary, type HostHistoryPoint, type InstanceOverview, type SyncRun, type SyncSchedule, type SyncStatus, type TrafficDay } from "./api"
 import { QuotaPanel } from "./quota"
-import { SeriesChart } from "./traffic-chart"
-import { Badge, Heading, Metric, Panel, SegmentedChoice, State, formatNumber, formatTime, money, utcMonth } from "./ui"
+import { HostTrend } from "./host-trend"
+import { Badge, Heading, Panel, SegmentedChoice, State, formatNumber, formatTime } from "./ui"
 
 export function trafficDays(rows: TrafficDay[], coverage: CoverageDay[] = []) {
   const days = new Map<string, {ingress: number | null; egress: number | null}>()
@@ -34,21 +34,16 @@ function utcDayBefore(date: Date, offset: number) {
 
 export function Overview() {
   const [revision, setRevision] = useState(0)
-  const [days, setDays] = useState<7 | 30>(7)
+  const [days, setDays] = useState<1 | 7 | 30>(1)
   const [working, setWorking] = useState(false)
   const [error, setError] = useState("")
   const sync = useRead<SyncStatus>("/sync/status", revision)
   const schedule = useRead<SyncSchedule>("/sync/schedule", revision)
   const host = useRead<HostSummary>("/server/status", revision)
-  const instances = useRead<InstanceOverview[]>("/instances", revision)
   const today = new Date()
-  const lastDay = utcDayBefore(today, 1)
-  const firstDay = utcDayBefore(today, days)
-  const lastMonth = lastDay.slice(0, 7)
-  const firstMonth = firstDay.slice(0, 7)
-  const traffic = useRead<TrafficSummary>(`/traffic/summary?month=${lastMonth}`, revision)
-  const prior = useRead<TrafficSummary>(firstMonth !== lastMonth ? `/traffic/summary?month=${firstMonth}` : null, revision)
-  const costs = useRead<CostSummary>(`/costs/summary?month=${utcMonth()}`, revision)
+  const history = useRead<HostHistoryPoint[]>(days > 1
+    ? `/server/history?from=${utcDayBefore(today, days - 1)}&to=${utcDayBefore(today, 0)}`
+    : null, revision)
   const changes = useRead<Choice[]>("/sync/changes", revision)
   const active = sync.data?.lastStatus === "RUNNING"
   useEffect(() => {
@@ -67,16 +62,8 @@ export function Overview() {
   const cloud = sync.data?.configured
   const last = sync.data?.lastSuccessfulAt || (sync.data?.lastStatus === "SUCCESS" ? sync.data.lastFinishedAt : "")
   const stale = last && Date.now() - Date.parse(last) > 172_800_000
-  const daily = new Map(trafficDays([...(prior.data?.daily ?? []), ...(traffic.data?.daily ?? [])]))
-  const totals = new Map<string, number>()
-  for (const item of costs.data?.daily ?? []) totals.set(item.currency, (totals.get(item.currency) ?? 0) + Number(item.costAmount))
-  const total = totals.size === 1 ? Array.from(totals.entries())[0] : null
-  const points = Array.from({length:days}, (_, index) => {
-    const day = utcDayBefore(today, days - index)
-    return {label:day.slice(5),value:daily.get(day)?.egress ?? null}
-  })
-  const trendError = traffic.error || prior.error
-  const trendPending = traffic.pending || prior.pending
+  const trend = days === 1 ? host : history
+  const points = days === 1 ? host.data?.history : history.data
   const alerts = host.data?.alerts ?? []
   return <>
     <Heading title="运行总览" actions={cloud
@@ -84,45 +71,32 @@ export function Overview() {
       : <Button asChild variant="prominent" size="lg"><Link to="/settings/oci">接入 OCI<ArrowRight data-icon="inline-end" /></Link></Button>} />
     <State error={error || sync.error} retry={sync.error ? sync.retry : undefined} />
     {sync.data && ["FAILED", "PARTIAL", "PAUSED"].includes(sync.data.lastStatus) && <State empty={sync.data.lastMessage} />}
-    <div className="overview-grid">
-      <div className="metric-grid overview-metrics">
-        <Metric label="本机 CPU" to="/monitor/host" value={formatNumber(host.data?.current?.cpuUsagePercent)} unit="%" note={host.data?.current ? `采样于 ${formatTime(host.data.current.sampledAt)}` : "等待本机采样"} />
-        <Metric label="本机内存" to="/monitor/host" value={formatNumber(host.data?.current?.memoryUsagePercent)} unit="%" />
-        <Metric label="本机根分区" to="/monitor/host" value={formatNumber(host.data?.disks?.find(item => item.mount === "/")?.usagePercent)} unit="%" />
-        <Metric label="本机网卡出站" to="/monitor/host" value={formatNumber(host.data?.networkAvailable && host.data.current ? host.data.current.networkTxBytesPerSecond / 1024 : null, 2)} unit="KiB/s" />
-      </div>
-      <Panel title="同步状态" className="sync-panel" actions={<Badge ready={Boolean(sync.data && last && !stale)}>{sync.data ? cloud ? syncLabel(sync.data.lastStatus) : "本机模式" : "读取中"}</Badge>}>
-        <dl className="sync-times">
-          <div><dt>最近成功</dt><dd>{last ? formatTime(last) : "—"}{stale && <span>数据较旧</span>}</dd></div>
-          <div><dt>下次同步</dt><dd>{cloud && schedule.data?.enabled && schedule.data.nextRunAt ? formatTime(schedule.data.nextRunAt) : "—"}</dd></div>
-        </dl>
-        <Link to="/sync" className="panel-link">同步记录 <ArrowRight size={15} /></Link>
-      </Panel>
-      <Panel title="出站流量趋势" subtitle="主网卡出站 · GiB · 按完整 UTC 日" className="chart-panel" actions={<SegmentedChoice label="流量时间范围" options={[{value:7,label:"7 天"}, {value:30,label:"30 天"}]} value={days} onChange={setDays} />}>
-        <State error={trendError} retry={() => {if (traffic.error) traffic.retry(); if (prior.error) prior.retry()}} pending={trendPending} />
-        {points.some(point => point.value !== null) ? <SeriesChart points={points} label="主网卡出站" unit="GiB" /> : !trendPending && !trendError && <State empty="同步完成后这里会显示趋势。" />}
-      </Panel>
-      <Panel title="需要关注" subtitle="本机告警和最近变化" className="change-panel">
-        <div className="change-list">{[...alerts, ...(changes.data ?? [])].map((item, index) => <div className="change-row" key={`${item.title}-${index}`}><strong>{item.title}</strong><small>{item.description}</small></div>)}</div>
-        {!alerts.length && !changes.data?.length && <State empty={cloud ? "当前没有需要关注的变化。" : "本机没有活跃告警。"} />}
-        <div className="subtle-row"><ShieldCheck size={14} />页面仅读取本地快照</div>
-      </Panel>
-    </div>
-    <QuotaPanel compact revision={revision} />
-    {cloud && <div className="metric-grid">
-      <Metric label="运行实例" to="/monitor/instances" value={instances.data && sync.data?.hasData ? String(instances.data.filter(row => row.instance.lifecycleState === "RUNNING").length) : "—"} unit="台" />
-      <Metric label="昨日主网卡出站" to="/usage/traffic" value={formatNumber(daily.get(lastDay)?.egress, 2)} unit="GiB" note="UTC 日" />
-      <Metric label="本月 OCI 已入账" to="/usage/cost" value={total ? money(total[1], total[0]) : "—"} note={totals.size > 1 ? "有多个币种，查看明细" : undefined} />
-    </div>}
-    <Panel title="实例快照" className="instance-panel" actions={<Link to="/monitor/instances">查看全部</Link>}>
-      <State error={instances.error} retry={instances.retry} pending={instances.pending} />
-      {instances.data?.length ? <InstanceTable instances={instances.data.slice(0, 5)} /> : !instances.pending && !instances.error && <State empty="当前没有实例快照。" />}
+    <Panel title="本机资源趋势" className="block-panel host-trend-panel"
+      subtitle={days === 30 ? "UTC 日均采样" : host.data?.current ? `最近采样 ${formatTime(host.data.current.sampledAt)}` : "按采样时间展示"}
+      actions={<SegmentedChoice label="资源时间范围" options={[{value:1,label:"24 小时"}, {value:7,label:"7 天"}, {value:30,label:"30 天"}]} value={days} onChange={setDays} />}>
+      <State error={trend.error} retry={trend.retry} pending={trend.pending && !points} />
+      {points && <HostTrend points={points} daily={days === 30} />}
     </Panel>
+    <div className="overview-grid">
+      <QuotaPanel compact revision={revision} />
+      <aside className="overview-sidebar">
+        <Panel title="OCI 同步" className="sync-panel" actions={<Badge ready={Boolean(sync.data && last && !stale)}>{sync.data ? cloud ? syncLabel(sync.data.lastStatus) : "本机模式" : "读取中"}</Badge>}>
+          <dl className="sync-times">
+            <div><dt>最近成功</dt><dd>{last ? formatTime(last) : "—"}{stale && <span>数据较旧</span>}</dd></div>
+            <div><dt>下次同步</dt><dd>{cloud && schedule.data?.enabled && schedule.data.nextRunAt ? formatTime(schedule.data.nextRunAt) : "—"}</dd></div>
+          </dl>
+          <Link to="/sync" className="panel-link">同步记录 <ArrowRight size={15} /></Link>
+        </Panel>
+        {Boolean(alerts.length || changes.data?.length) && <Panel title="需要关注" className="change-panel">
+          <div className="change-list">{[...alerts, ...(changes.data ?? [])].map((item, index) => <div className="change-row" key={`${item.title}-${index}`}><strong>{item.title}</strong><small>{item.description}</small></div>)}</div>
+        </Panel>}
+      </aside>
+    </div>
   </>
 }
 
 export function InstanceTable({instances}: {instances: InstanceOverview[]}) {
-  return <Table aria-label="实例快照"><TableHeader><TableRow><TableHead>实例</TableHead><TableHead>状态</TableHead><TableHead>CPU</TableHead><TableHead>内存</TableHead></TableRow></TableHeader><TableBody>
+  return <Table aria-label="云实例清单"><TableHeader><TableRow><TableHead>实例</TableHead><TableHead>状态</TableHead><TableHead>CPU</TableHead><TableHead>内存</TableHead></TableRow></TableHeader><TableBody>
     {instances.map(row => <TableRow key={row.instance.id}>
       <TableCell><Link to={`/monitor/instances/${encodeURIComponent(row.instance.id)}`}>{row.instance.displayName}</Link><small>{row.instance.shape}</small></TableCell>
       <TableCell><Badge ready={row.instance.lifecycleState === "RUNNING"}>{instanceStateLabel(row.instance.lifecycleState)}</Badge></TableCell>

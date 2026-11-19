@@ -22,6 +22,7 @@ import org.ociarmmonitor.config.FreeQuotaRepository;
 import org.ociarmmonitor.config.OciSettingsProvider;
 import org.ociarmmonitor.instance.CloudInstance;
 import org.ociarmmonitor.instance.CloudInstanceRepository;
+import org.ociarmmonitor.traffic.TrafficRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -38,21 +39,24 @@ public class OciQuotaService {
   private final OciSettingsProvider settings;
   private final OciVolumeService volumes;
   private final OciBudgetGate budget;
+  private final TrafficRepository traffic;
   private final JdbcTemplate jdbc;
 
   public OciQuotaService(FreeQuotaRepository limits, CloudInstanceRepository instances, OciSettingsProvider settings,
-                         OciVolumeService volumes, OciBudgetGate budget, JdbcTemplate jdbc) {
+                         OciVolumeService volumes, OciBudgetGate budget, JdbcTemplate jdbc, TrafficRepository traffic) {
     this.limits = limits;
     this.instances = instances;
     this.settings = settings;
     this.volumes = volumes;
     this.budget = budget;
+    this.traffic = traffic;
     this.jdbc = jdbc;
   }
 
   public record Item(String key, String name, String unit, double limit, Double used, String status,
                      String scope, String updatedAt, String requestedThrough) {}
-  public record Summary(String month, Double runningA1Ocpus, Double runningA1MemoryGb, List<Item> items) {}
+  public record Summary(String month, Double runningA1Ocpus, Double runningA1MemoryGb, List<Item> items,
+                        TrafficRepository.InstanceMonth instanceTraffic, OciVolumeService.Failure volumeFailure) {}
   private record Snapshot(String status, String updatedAt, String requestedThrough, String computeRegion, Double cpu, Double memory, Double outbound) {}
   private enum Meter { A1_CPU, A1_MEMORY, EGRESS }
 
@@ -76,7 +80,11 @@ public class OciQuotaService {
     String diskState = !currentMonth ? "NOT_APPLICABLE" : outsideHome && "AVAILABLE".equals(volumeStatus) ? "OUTSIDE_HOME"
       : "AVAILABLE".equals(volumeStatus) && total == null ? "NO_DATA"
       : "AVAILABLE".equals(volumeStatus) ? "SCOPED" : volumeStatus;
-    List<CloudInstance> a1 = instances.findAll().stream()
+    List<CloudInstance> inventory = instances.findAll();
+    String instanceId = settings.localInstanceId();
+    if ((instanceId == null || instanceId.isBlank()) && inventory.size() == 1) instanceId = inventory.getFirst().id();
+    var instanceTraffic = instanceId == null || instanceId.isBlank() ? null : traffic.instanceMonth(month, instanceId);
+    List<CloudInstance> a1 = inventory.stream()
       .filter(instance -> A1_SHAPE.equals(instance.shape()) && "RUNNING".equals(instance.lifecycleState())).toList();
     return new Summary(month.toString(),
       a1.isEmpty() || a1.stream().anyMatch(item -> item.ocpus() <= 0) ? null : a1.stream().mapToDouble(CloudInstance::ocpus).sum(),
@@ -87,7 +95,7 @@ public class OciQuotaService {
         new Item("volume", "启动卷与块卷", "GB", quota.blockVolumeGb(), total == null ? null : total.doubleValue(), diskState,
           volumeScope, currentMonth ? disk.succeededAt() : null, null),
         usageItem("egress", "OCI 出站流量", "GB", quota.outboundDataTransferGb(), usage.outbound(), billingStatus, "租户计量 · 全部区域", usage, true)
-      ));
+      ), instanceTraffic, disk.failure());
   }
 
   private Item usageItem(String key, String name, String unit, double limit, Double used, String status,

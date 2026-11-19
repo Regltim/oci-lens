@@ -82,7 +82,7 @@ class LensStorageTest {
   }
 
   @Test
-  void keepsLegacyHostAndTrafficOutsideCurrentSamplingAndRetention() {
+  void showsImportedHostAndTrafficInOrdinaryHistoryWithoutCountingDuplicates() {
     try (var storage = storage()) {
       JdbcTemplate jdbc = new JdbcTemplate(storage);
       jdbc.update("INSERT INTO legacy_host_snapshot VALUES ('旧站主机', '2026-02-01T08:00:00Z', 20, 30, 40, 50, 60)");
@@ -93,11 +93,19 @@ class LensStorageTest {
       assertThat(host.listHistorySources()).singleElement().satisfies(item -> assertThat(item.host()).isEqualTo("旧站主机"));
       var window = HistoryWindow.parse("2026-02-01", "2026-02-01");
       assertThat(host.listHistory(window, "旧站主机")).hasSize(1);
-      assertThat(host.listHistory(window, "")).isEmpty();
+      assertThat(host.listHistory(window, "")).singleElement().satisfies(sample ->
+        assertThat(sample.cpuUsagePercent()).isEqualTo(20.0));
       var month = YearMonth.of(2026, 2);
       assertThat(traffic.listLegacyMonth(month)).hasSize(1);
-      assertThat(traffic.listMonth(month)).isEmpty();
-      assertThat(traffic.listMonths(true)).containsExactly("2026-02");
+      assertThat(traffic.listMonth(month)).singleElement().satisfies(row -> assertThat(row.egressGb()).isEqualTo(3));
+      assertThat(traffic.listMonths(false)).containsExactly("2026-02");
+      assertThat(traffic.instanceMonth(month, "old-id").completeDays()).isZero();
+      traffic.save(new org.ociarmmonitor.traffic.TrafficDaily("old-id", "2026-02-01", 5, 6));
+      var monthUsage = traffic.instanceMonth(month, "old-id");
+      assertThat(monthUsage.egressGiB()).isEqualTo(6);
+      assertThat(monthUsage.observedDays()).isEqualTo(1);
+      assertThat(monthUsage.completeDays()).isEqualTo(1);
+      assertThat(traffic.instanceMonth(month, "unknown-id").egressGiB()).isNull();
     }
   }
 

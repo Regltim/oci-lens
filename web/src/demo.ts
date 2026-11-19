@@ -1,4 +1,4 @@
-import type { Budget, CostSummary, HostSummary, InstanceOverview, MaintenanceWindow, ManualCost, QuotaSettings, QuotaSummary, SyncSchedule, TrafficSummary, WechatStatus } from "./api"
+import type { Budget, CostSummary, HostHistoryPoint, HostSummary, InstanceOverview, MaintenanceWindow, ManualCost, QuotaSettings, QuotaSummary, SyncSchedule, TrafficSummary, WechatStatus } from "./api"
 
 const now = new Date()
 const day = (offset: number) => new Date(now.getTime() - offset * 86400000).toISOString().slice(0,10)
@@ -18,7 +18,42 @@ const host: HostSummary = {
   disks:[{mount:"/",totalBytes:64424509440,usedBytes:21904333210,usableBytes:42520176230,usagePercent:34}],
   networkAvailable:true, systemInfo:{availableProcessors:4},
   current:{sampledAt:now.toISOString(),cpuUsagePercent:12.8,memoryUsagePercent:42,diskUsagePercent:34,memoryTotalBytes:25769803776,diskTotalBytes:64424509440,diskUsableBytes:42520176230,networkRxBytesPerSecond:12032,networkTxBytesPerSecond:43710,uptimeSeconds:340200},
-  history:[9,14,11,10,15,12.8].map((cpuUsagePercent,index) => ({cpuUsagePercent,memoryUsagePercent:42,diskUsagePercent:34,networkRxBytesPerSecond:12032 * (index + 1),networkTxBytesPerSecond:43710 * (index + 1),sampledAt:new Date(now.getTime() - (5 - index) * 300000).toISOString()})), alerts:[],
+  history:[null,14,11,10,15,12.8].map((cpuUsagePercent,index) => ({cpuUsagePercent,memoryUsagePercent:40 + index * 0.4,diskUsagePercent:34,networkRxBytesPerSecond:index === 0 ? null : 12032 * (index + 1),networkTxBytesPerSecond:index === 0 ? null : 43710 * (index + 1),sampledAt:new Date(now.getTime() - (5 - index) * 300000).toISOString()})), alerts:[],
+}
+const earlierHostSamples: HostHistoryPoint[] = Array.from({length:29}, (_, index) => ({
+  sampledAt:`${day(29 - index)}T08:00:00Z`,
+  cpuUsagePercent:4 + (index * 3) % 12,
+  memoryUsagePercent:38 + index % 5,
+  diskUsagePercent:32 + index * 0.06,
+  networkRxBytesPerSecond:21000 + (index % 6) * 7300,
+  networkTxBytesPerSecond:89000 + (index % 7) * 9800,
+}))
+
+function demoHostHistory(from: string, to: string) {
+  const rows = [...earlierHostSamples, ...host.history].filter(sample => {
+    const date = sample.sampledAt.slice(0, 10)
+    return date >= from && date <= to
+  })
+  if (Date.parse(to) - Date.parse(from) < 7 * 86400000) return rows
+
+  const days = new Map<string, HostHistoryPoint[]>()
+  for (const row of rows) {
+    const date = row.sampledAt.slice(0, 10)
+    const samples = days.get(date) ?? []
+    samples.push(row)
+    days.set(date, samples)
+  }
+  return Array.from(days, ([date, samples]) => {
+    function mean(field: Exclude<keyof HostHistoryPoint, "sampledAt">) {
+      const values = samples.flatMap(sample => sample[field] ?? [])
+      return values.length ? values.reduce((total, value) => total + value, 0) / values.length : null
+    }
+    return {
+      sampledAt:`${date}T00:00:00Z`, cpuUsagePercent:mean("cpuUsagePercent"),
+      memoryUsagePercent:mean("memoryUsagePercent"), diskUsagePercent:mean("diskUsagePercent"),
+      networkRxBytesPerSecond:mean("networkRxBytesPerSecond"), networkTxBytesPerSecond:mean("networkTxBytesPerSecond"),
+    }
+  })
 }
 let schedule: SyncSchedule = {enabled:true,cronExpression:"0 0 8 * * *",zoneId:"Asia/Shanghai",syncOnStartup:false,nextRunAt:at(-1)}
 let wechat: WechatStatus = {enabled:false,configured:false,dailySummaryTime:"09:00",zoneId:"Asia/Shanghai",recipientCount:0,immediatePushEnabled:true,dailySummaryEnabled:false,detailPageEnabled:false,detailPageTokenTtlDays:1,encryptionReady:false}
@@ -75,13 +110,27 @@ export function demoRequest<T>(path: string, method: string, body: unknown): T {
     if (url.pathname.endsWith("/diagnostics")) return {summary:"示例连接检查通过。",overallStatus:"SUCCESS",steps:[{name:"读取实例",status:"SUCCESS",message:"示例只读检查通过",suggestion:"",durationMs:12}]} as T
     return {status:"SUCCESS",username} as T
   }
+  if (url.pathname === "/server/history") {
+    return demoHostHistory(url.searchParams.get("from") ?? "", url.searchParams.get("to") ?? "") as T
+  }
   if (url.pathname === "/dashboard/quota") {
+    const month = day(0).slice(0, 7)
+    const rows = traffic.daily.filter(row => row.instanceId === ids[0] && row.statDate.startsWith(month))
     const summary: QuotaSummary = {
-      month:day(0).slice(0, 7), runningA1Ocpus:4, runningA1MemoryGb:24,
+      month, runningA1Ocpus:4, runningA1MemoryGb:24,
+      instanceTraffic:{
+        instanceId:ids[0],
+        ingressGiB:rows.length ? rows.reduce((total, row) => total + (row.ingressGb ?? 0), 0) : null,
+        egressGiB:rows.length ? rows.reduce((total, row) => total + (row.egressGb ?? 0), 0) : null,
+        observedDays:rows.length,
+        completeDays:rows.filter(row => !traffic.coverage.some(day => day.statDate === row.statDate)).length,
+        elapsedDays:now.getUTCDate() - 1,
+      },
+      volumeFailure:{operation:"ListBootVolumes",httpStatus:403},
       items:[
         {key:"a1-cpu", name:"A1 OCPU", limit:quota.ampereOcpuHours, unit:"OCPU 小时", used:420, status:"AVAILABLE"},
         {key:"a1-memory", name:"A1 内存", limit:quota.ampereMemoryGbHours, unit:"GB 小时", used:2520, status:"AVAILABLE"},
-        {key:"volume", name:"启动卷与块卷", limit:quota.blockVolumeGb, unit:"GB", used:100, status:"SCOPED"},
+        {key:"volume", name:"启动卷与块卷", limit:quota.blockVolumeGb, unit:"GB", used:null, status:"DENIED"},
         {key:"egress", name:"OCI 出站流量", limit:quota.outboundDataTransferGb, unit:"GB", used:null, status:"NO_DATA"},
       ].map(item => ({...item,scope:"示例范围",updatedAt:at(0),requestedThrough:item.key === "volume" ? null : day(1)})),
     }
@@ -106,7 +155,7 @@ export function demoRequest<T>(path: string, method: string, body: unknown): T {
   }
   if (url.pathname === "/cost-budgets") return budgets.filter(row => row.month === url.searchParams.get("month")) as T
   const fixtures: Record<string, unknown> = {
-    "/instances":instances,"/instances/history":[],"/server/status":host,"/server/history-sources":[],"/server/history":host.history,
+    "/instances":instances,"/instances/history":[],"/server/status":host,"/server/history-sources":[],
     "/settings/quota":quota,"/traffic/months":url.searchParams.get("source") === "legacy" ? [] : [...new Set(traffic.daily.map(row => row.statDate.slice(0, 7)))],
     "/costs/months":[...new Set([...costs.daily.map(row => row.statDate.slice(0, 7)), ...costs.manualCosts.map(row => row.occurredOn.slice(0, 7))])],
     "/sync/schedule":schedule,"/maintenance-windows":windows,

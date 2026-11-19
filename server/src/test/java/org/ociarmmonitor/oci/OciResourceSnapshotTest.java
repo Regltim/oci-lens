@@ -83,6 +83,7 @@ class OciResourceSnapshotTest {
       service.refresh(settings(), provider, TENANCY);
       var failed = service.forInstance("instance");
       assertThat(failed.snapshot().status()).isEqualTo("DENIED");
+      assertThat(failed.snapshot().failure()).isEqualTo(new OciVolumeService.Failure("ListVolumes", 403));
       assertThat(failed.snapshot().succeededAt()).isEqualTo(first.snapshot().succeededAt());
       assertThat(failed.volumes()).containsExactlyElementsOf(first.volumes());
       assertThat(service.totalGb()).isEqualTo(150);
@@ -97,9 +98,9 @@ class OciResourceSnapshotTest {
       var volumes = mock(OciVolumeService.class);
       when(source.isConfigured(any())).thenReturn(true);
       when(source.billingEnabled()).thenReturn(true);
-      when(volumes.status()).thenReturn(new OciVolumeService.Status("PENDING", null, null, null, null, REGION, false));
+      when(volumes.status()).thenReturn(new OciVolumeService.Status("PENDING", null, null, null, null, REGION, false, null));
       var service = new OciQuotaService(new FreeQuotaRepository(jdbc), new CloudInstanceRepository(jdbc), source, volumes,
-        new OciBudgetGate(jdbc, 80, 1000), jdbc);
+        new OciBudgetGate(jdbc, 80, 1000), jdbc, new org.ociarmmonitor.traffic.TrafficRepository(jdbc));
       var client = mock(UsageapiClient.class);
       when(client.requestSummarizedUsages(any())).thenReturn(usage(List.of(
         row("B93297", "OCPU Per Hour", REGION, "100.5"), row("B93297", "hour", "us-ashburn-1", "45"),

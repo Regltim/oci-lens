@@ -37,7 +37,7 @@ export function QuotaSettingsPanel() {
     }
   }
 
-  return <Panel title="免费额度" subtitle="按当前租户核实的免费额度填写。出站 10 TB 对应 10,000 GB。">
+  return <Panel title="用量上限" subtitle="按当前租户核实的用量上限填写。出站 10 TB 对应 10,000 GB。">
     <State pending={quota.pending && !quota.data} error={quota.error} retry={quota.retry} />
     {quota.data && <form key={quota.data.updatedAt} onSubmit={save} onChange={() => setNotice("")}>
       <fieldset className="filter-row" disabled={busy}>

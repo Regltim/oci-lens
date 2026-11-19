@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react"
 import { Navigate, Route, Routes, useSearchParams } from "react-router-dom"
 import { Button } from "@/components/glass/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/glass/table"
-import { query, request, useRead, type Budget, type CostSummary, type CoverageDay, type HistoricalInstance, type InstanceOverview, type ManualCost, type TrafficSummary } from "./api"
+import { query, request, useRead, type Budget, type CostSummary, type CoverageDay, type InstanceOverview, type ManualCost, type TrafficSummary } from "./api"
 import { trafficDays } from "./overview"
 import { SeriesChart } from "./traffic-chart"
 import { Heading, Metric, Panel, State, Tabs, formatNumber, money, utcMonth } from "./ui"
@@ -44,23 +44,19 @@ function MonthFilter({month, available, onChange}: {month: string; available: st
 
 function Traffic() {
   const [params, setParams] = useSearchParams()
-  const source = params.get("source") === "legacy" ? "legacy" : "current"
-  const archived = source === "legacy"
-  const months = useRead<string[]>(query("/traffic/months", {source}))
-  const month = params.get("month") || (archived ? months.data?.[0] : null) || utcMonth()
+  const months = useRead<string[]>("/traffic/months")
+  const month = params.get("month") || utcMonth()
   const instanceId = params.get("instance") || ""
   const instances = useRead<InstanceOverview[]>("/instances")
-  const historical = useRead<HistoricalInstance[]>("/instances/history")
-  const options = [...(instances.data ?? []).map(row => row.instance), ...(historical.data ?? [])]
-  const traffic = useRead<TrafficSummary>(query("/traffic/summary", {month, instanceId, source}))
+  const options = (instances.data ?? []).map(row => row.instance)
+  const traffic = useRead<TrafficSummary>(query("/traffic/summary", {month, instanceId}))
   const rows = trafficDays(traffic.data?.daily ?? [], traffic.data?.coverage ?? [])
   const valid = rows.filter(([,row]) => row.egress != null)
   return <>
-    <Panel title={archived ? "旧站主网卡流量" : "主网卡流量"} subtitle={archived ? "按旧站采集窗口归档，日期可能只有部分采样" : "按完整 UTC 日汇总"} className="block-panel">
+    <Panel title="主网卡流量" subtitle="按 UTC 日展示已采集流量" className="block-panel">
       <div className="filter-row usage-filters">
-        <label>数据来源<select value={source} onChange={event => setParams({source:event.target.value})}><option value="current">OCI Lens</option><option value="legacy">旧站采样</option></select></label>
-        <MonthFilter month={month} available={months.data ?? []} onChange={value => setParams({month:value,instance:instanceId,source})} />
-        <label>实例<select value={instanceId} onChange={event => setParams({month,instance:event.target.value,source})}><option value="">全部</option>{options.map(instance => <option key={instance.id} value={instance.id}>{instance.displayName}</option>)}</select></label>
+        <MonthFilter month={month} available={months.data ?? []} onChange={value => setParams({month:value,instance:instanceId})} />
+        <label>实例<select value={instanceId} onChange={event => setParams({month,instance:event.target.value})}><option value="">全部</option>{options.map(instance => <option key={instance.id} value={instance.id}>{instance.displayName}</option>)}</select></label>
       </div>
       <State pending={traffic.pending} error={traffic.error} retry={traffic.retry} empty={traffic.data && !rows.length ? "当前月份暂无流量快照。" : undefined} />
       {valid.length > 0 && <SeriesChart points={rows.map(([day, item]) => ({label:day.slice(5),value:item.egress}))} label="主网卡出站" unit="GiB" />}
@@ -68,7 +64,7 @@ function Traffic() {
         {rows.slice().reverse().map(([day,value]) => <TableRow key={day}><TableCell>{day}</TableCell><TableCell numeric>{formatNumber(value.ingress, 2)}</TableCell><TableCell numeric>{formatNumber(value.egress, 2)}</TableCell></TableRow>)}
       </TableBody></Table>}
     </Panel>
-    {!archived && <Coverage rows={traffic.data?.coverage ?? []} source="traffic" reload={traffic.retry} />}
+    <Coverage rows={traffic.data?.coverage ?? []} source="traffic" reload={traffic.retry} />
   </>
 }
 
@@ -189,7 +185,7 @@ function Costs() {
 }
 
 export function Usage() {
-  return <><Heading title="用量与费用" subtitle="从本地快照查看流量和已入账金额" /><Tabs label="用量页面" items={[{to:"/usage/traffic",label:"流量"},{to:"/usage/cost",label:"费用"},{to:"/usage/quota",label:"免费额度"}]} />
+  return <><Heading title="用量与费用" subtitle="从本地快照查看流量和已入账金额" /><Tabs label="用量页面" items={[{to:"/usage/traffic",label:"流量"},{to:"/usage/cost",label:"费用"},{to:"/usage/quota",label:"本月使用"}]} />
     <Routes><Route index element={<Navigate to="traffic" replace />} /><Route path="traffic" element={<Traffic />} /><Route path="cost" element={<Costs />} /><Route path="quota" element={<QuotaPanel />} /><Route path="*" element={<Navigate to="traffic" replace />} /></Routes>
   </>
 }

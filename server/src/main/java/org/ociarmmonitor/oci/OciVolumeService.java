@@ -39,8 +39,9 @@ public class OciVolumeService {
     this.transactions = transactions;
   }
 
+  public record Failure(String operation, Integer httpStatus) {}
   public record Status(String status, String attemptedAt, String succeededAt, String region, String compartmentId,
-                       String homeRegion, boolean incomplete) {}
+                       String homeRegion, boolean incomplete, Failure failure) {}
   public record Volume(String id, String name, String kind, Long sizeGb, String state, String attachmentState) {}
   public record Details(Status snapshot, List<Volume> volumes) {}
   private record Attachment(String volumeId, String instanceId, String state) {}
@@ -48,11 +49,13 @@ public class OciVolumeService {
 
   public Status status() {
     return jdbc.query("""
-      SELECT status, attempted_at, succeeded_at, region, compartment_id, home_region, incomplete
-      FROM oci_volume_snapshot WHERE id = 1
+      SELECT s.status, s.attempted_at, s.succeeded_at, s.region, s.compartment_id, s.home_region, s.incomplete,
+        f.operation, f.http_status
+      FROM oci_volume_snapshot s LEFT JOIN oci_volume_read_failure f ON f.id = s.id WHERE s.id = 1
       """, (row, index) -> new Status(row.getString(1), row.getString(2), row.getString(3), row.getString(4),
-      row.getString(5), row.getString(6), row.getBoolean(7))).stream().findFirst()
-      .orElse(new Status("PENDING", null, null, null, null, null, false));
+      row.getString(5), row.getString(6), row.getBoolean(7),
+      row.getString(8) == null ? null : new Failure(row.getString(8), (Integer) org.springframework.jdbc.support.JdbcUtils.getResultSetValue(row, 9, Integer.class))))
+      .stream().findFirst().orElse(new Status("PENDING", null, null, null, null, null, false, null));
   }
 
   @Transactional(readOnly = true)
@@ -77,9 +80,11 @@ public class OciVolumeService {
     String region = settings.region();
     String compartment = settings.compartmentOcid();
     String attempted = Instant.now().toString();
+    String operation = "初始化 OCI 云盘客户端";
     try (var identity = clients.identityClient(provider, region);
          var storage = clients.blockstorageClient(provider, region);
          var compute = clients.computeClient(provider, region)) {
+      operation = "ListAvailabilityDomains";
       budget.reserve(0);
       var domains = identity.listAvailabilityDomains(ListAvailabilityDomainsRequest.builder()
         .compartmentId(compartment).build()).getItems();
@@ -89,12 +94,14 @@ public class OciVolumeService {
       List<Attachment> attachments = new ArrayList<>();
       for (var domain : domains) {
         String ad = domain.getName();
+        operation = "ListBootVolumes";
         pages(page -> {
           var response = storage.listBootVolumes(ListBootVolumesRequest.builder()
             .availabilityDomain(ad).compartmentId(compartment).page(page).build());
           return new Page<>(response.getItems(), response.getOpcNextPage());
         }).forEach(volume -> addVolume(volumes, volume.getId(), volume.getDisplayName(), "BOOT",
           volume.getSizeInGBs(), state(volume.getLifecycleState())));
+        operation = "ListBootVolumeAttachments";
         pages(page -> {
           var response = compute.listBootVolumeAttachments(ListBootVolumeAttachmentsRequest.builder()
             .availabilityDomain(ad).compartmentId(compartment).page(page).build());
@@ -102,11 +109,13 @@ public class OciVolumeService {
         }).forEach(attachment -> attachments.add(new Attachment(attachment.getBootVolumeId(),
           attachment.getInstanceId(), state(attachment.getLifecycleState()))));
       }
+      operation = "ListVolumes";
       pages(page -> {
         var response = storage.listVolumes(ListVolumesRequest.builder().compartmentId(compartment).page(page).build());
         return new Page<>(response.getItems(), response.getOpcNextPage());
       }).forEach(volume -> addVolume(volumes, volume.getId(), volume.getDisplayName(), "BLOCK",
         volume.getSizeInGBs(), state(volume.getLifecycleState())));
+      operation = "ListVolumeAttachments";
       pages(page -> {
         var response = compute.listVolumeAttachments(ListVolumeAttachmentsRequest.builder()
           .compartmentId(compartment).page(page).build());
@@ -114,14 +123,16 @@ public class OciVolumeService {
       }).forEach(attachment -> attachments.add(new Attachment(attachment.getVolumeId(),
         attachment.getInstanceId(), state(attachment.getLifecycleState()))));
 
+      operation = "ListRegionSubscriptions";
       String homeRegion = resolveHomeRegion(identity, tenancyId);
       var active = attachments.stream().filter(attachment -> attachment.volumeId() != null
         && attachment.instanceId() != null && List.of("ATTACHED", "ATTACHING", "DETACHING").contains(attachment.state())).toList();
       boolean incomplete = active.stream().anyMatch(attachment -> !volumes.containsKey(attachment.volumeId()));
+      operation = "保存云盘快照";
       transactions.executeWithoutResult(transaction -> publish(region, compartment, attempted, homeRegion, volumes, active, incomplete));
     } catch (RuntimeException failure) {
       String state = sourceFailure(failure);
-      recordFailure(state, attempted);
+      recordFailure(state, attempted, operation, failure instanceof BmcException bmc ? bmc.getStatusCode() : null);
       if (failure instanceof OciBudgetGate.BudgetExceeded) throw failure;
       LOGGER.warn("OCI volume snapshot refresh failed ({})", state);
     }
@@ -142,6 +153,7 @@ public class OciVolumeService {
 
   private void publish(String region, String compartment, String attempted, String homeRegion, Map<String, Volume> volumes,
                        List<Attachment> attachments, boolean incomplete) {
+    jdbc.update("DELETE FROM oci_volume_read_failure WHERE id = 1");
     jdbc.update("DELETE FROM oci_volume_attachment");
     jdbc.update("DELETE FROM oci_volume");
     volumes.values().forEach(volume -> jdbc.update("INSERT INTO oci_volume VALUES (?, ?, ?, ?, ?)",
@@ -165,11 +177,17 @@ public class OciVolumeService {
       """, attempted, Instant.now().toString(), region, compartment, homeRegion, incomplete);
   }
 
-  private void recordFailure(String status, String attempted) {
-    jdbc.update("""
-      INSERT INTO oci_volume_snapshot(id, status, attempted_at) VALUES (1, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET status = excluded.status, attempted_at = excluded.attempted_at
-      """, status, attempted);
+  private void recordFailure(String status, String attempted, String operation, Integer httpStatus) {
+    transactions.executeWithoutResult(transaction -> {
+      jdbc.update("""
+        INSERT INTO oci_volume_snapshot(id, status, attempted_at) VALUES (1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET status = excluded.status, attempted_at = excluded.attempted_at
+        """, status, attempted);
+      jdbc.update("""
+        INSERT INTO oci_volume_read_failure(id, operation, http_status) VALUES (1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET operation = excluded.operation, http_status = excluded.http_status
+        """, operation, httpStatus);
+    });
   }
 
   private <T> List<T> pages(Function<String, Page<T>> request) {

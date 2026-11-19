@@ -166,7 +166,7 @@ function MonitorSettings() {
 
 export function Settings(props: AccountProps | {report: PublicReportLink}) {
   if ("report" in props) return <PublicReport {...props.report} />
-  return <section className="settings-page"><Heading title="设置" /><Tabs label="设置页面" items={[{to:"/settings/monitor",label:"监控偏好"},{to:"/settings/oci",label:"OCI 接入"},{to:"/settings/sync",label:"同步计划"},{to:"/settings/quota",label:"免费额度"},{to:"/settings/account",label:"账号"},{to:"/settings/notifications",label:"通知"}]} />
+  return <section className="settings-page"><Heading title="设置" /><Tabs label="设置页面" items={[{to:"/settings/monitor",label:"监控偏好"},{to:"/settings/oci",label:"OCI 接入"},{to:"/settings/sync",label:"同步计划"},{to:"/settings/quota",label:"用量上限"},{to:"/settings/account",label:"账号"},{to:"/settings/notifications",label:"通知"}]} />
     <Routes><Route index element={<Navigate to="oci" replace />} /><Route path="monitor" element={<MonitorSettings />} /><Route path="oci" element={<ConnectionSettings />} /><Route path="sync" element={<ScheduleSettings />} /><Route path="quota" element={<QuotaSettingsPanel />} /><Route path="account" element={<Account {...props} />} /><Route path="notifications" element={<Notifications />} /><Route path="*" element={<Navigate to="oci" replace />} /></Routes>
   </section>
 }

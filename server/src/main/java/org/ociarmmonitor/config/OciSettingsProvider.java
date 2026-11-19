@@ -85,6 +85,8 @@ public class OciSettingsProvider {
     );
   }
 
+  public String localInstanceId() { return instanceId; }
+
   public OciSettingsStatus getStatus() {
     OciSettings settings = getSettings();
     return new OciSettingsStatus(

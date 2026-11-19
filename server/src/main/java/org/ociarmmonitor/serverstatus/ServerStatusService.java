@@ -42,10 +42,10 @@ public class ServerStatusService {
   }
 
   public ServerStatusSnapshot sampleAndStore() {
-    ServerStatusSnapshot snapshot = serverStatusCollector.sample();
-    serverStatusRepository.save(snapshot);
+    var sample = serverStatusCollector.sample();
+    serverStatusRepository.save(sample.snapshot(), sample.cpuMeasured(), sample.networkMeasured());
     serverStatusRepository.deleteExpired();
-    return snapshot;
+    return sample.snapshot();
   }
 
   public List<ServerStatusRepository.HostHistorySource> listHistorySources() {

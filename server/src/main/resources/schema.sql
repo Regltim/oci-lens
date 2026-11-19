@@ -333,3 +333,35 @@ CREATE TABLE IF NOT EXISTS oci_usage_snapshot (
   succeeded_at TEXT, requested_through TEXT, compute_region TEXT,
   ocpu_hours REAL, memory_gb_hours REAL, outbound_gb REAL
 );
+
+CREATE INDEX IF NOT EXISTS idx_legacy_host_sampled_at ON legacy_host_snapshot(sampled_at);
+
+CREATE VIEW IF NOT EXISTS host_metric_history AS
+SELECT sampled_at,
+  CASE WHEN cpu_usage_percent >= 0 THEN cpu_usage_percent END AS cpu_usage_percent,
+  CASE WHEN memory_total_bytes > 0 THEN memory_usage_percent END AS memory_usage_percent,
+  CASE WHEN disk_total_bytes > 0 THEN disk_usage_percent END AS disk_usage_percent,
+  CASE WHEN network_rx_bytes_per_second >= 0 THEN network_rx_bytes_per_second END AS network_rx_bytes_per_second,
+  CASE WHEN network_tx_bytes_per_second >= 0 THEN network_tx_bytes_per_second END AS network_tx_bytes_per_second
+FROM server_status_snapshot
+UNION ALL
+SELECT sampled_at, cpu_usage_percent, memory_usage_percent, disk_usage_percent,
+  network_rx_bytes_per_second, network_tx_bytes_per_second
+FROM legacy_host_snapshot legacy
+WHERE NOT EXISTS (SELECT 1 FROM server_status_snapshot current WHERE current.sampled_at = legacy.sampled_at)
+  AND NOT EXISTS (
+    SELECT 1 FROM legacy_host_snapshot other WHERE other.sampled_at = legacy.sampled_at AND other.host_label < legacy.host_label
+  );
+
+CREATE VIEW IF NOT EXISTS traffic_metric_history AS
+SELECT instance_id, stat_date, ingress_gb, egress_gb, 1 AS complete FROM traffic_daily
+UNION ALL
+SELECT instance_id, stat_date, ingress_gb, egress_gb, 0 AS complete
+FROM legacy_traffic_daily legacy
+WHERE NOT EXISTS (
+  SELECT 1 FROM traffic_daily current WHERE current.instance_id = legacy.instance_id AND current.stat_date = legacy.stat_date
+);
+
+CREATE TABLE IF NOT EXISTS oci_volume_read_failure (
+  id INTEGER PRIMARY KEY CHECK (id = 1), operation TEXT NOT NULL, http_status INTEGER
+);

@@ -24,6 +24,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.ociarmmonitor.instance.CloudInstanceRepository;
 import org.ociarmmonitor.instance.MetricRepository;
 import org.ociarmmonitor.traffic.TrafficRepository;
+import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -196,6 +197,15 @@ class OciSyncServiceTest {
       .isEqualTo(details.getTimeUsageEnded().toInstant().truncatedTo(ChronoUnit.DAYS));
     assertThat(details.getTimeUsageStarted().toInstant().atZone(ZoneOffset.UTC).toLocalTime().toString()).isEqualTo("00:00");
     assertThat(details.getTimeUsageEnded().toInstant().atZone(ZoneOffset.UTC).toLocalTime().toString()).isEqualTo("00:00");
+  }
+
+  @Test
+  void fillsUnattemptedMonthDaysAndKeepsRecentRetryWindow() {
+    LocalDate today = LocalDate.of(2026, 11, 19);
+    assertThat(OciSyncService.trafficStart(today, List.of())).isEqualTo(LocalDate.of(2026, 11, 1));
+    var previous = today.withDayOfMonth(1).datesUntil(today.minusDays(2))
+      .map(day -> new LensLedger.CoverageDay(day.toString(), "GAP", "")).toList();
+    assertThat(OciSyncService.trafficStart(today, previous)).isEqualTo(today.minusDays(2));
   }
 
   private OciSyncService buildService(TaskExecutor taskExecutor) {

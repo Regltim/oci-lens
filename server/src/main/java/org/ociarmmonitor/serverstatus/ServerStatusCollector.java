@@ -31,7 +31,7 @@ public class ServerStatusCollector {
   private String networkInterface = "";
 
   private final String datasourceUrl;
-  private CpuSample previousCpuSample;
+  private CpuReading previousCpuReading;
   private NetworkSample previousNetworkSample;
 
   public ServerStatusCollector(
@@ -45,10 +45,12 @@ public class ServerStatusCollector {
     this.datasourceUrl = datasourceUrl;
   }
 
-  public synchronized ServerStatusSnapshot sample() {
+  record Sample(ServerStatusSnapshot snapshot, boolean cpuMeasured, boolean networkMeasured) {}
+
+  synchronized Sample sample() {
     Instant now = Instant.now();
     CpuReading cpuReading = readCpuReading();
-    double cpuUsagePercent = calculateCpuUsage(cpuReading, now);
+    double cpuUsagePercent = calculateCpuUsage(cpuReading);
     NetworkReading networkReading = readNetworkReading();
     NetworkRate networkRate = calculateNetworkRate(networkReading, now);
     MemoryReading memoryReading = readMemoryReading();
@@ -57,9 +59,9 @@ public class ServerStatusCollector {
     Runtime runtime = Runtime.getRuntime();
     ThreadMXBean threadMXBean = ManagementFactory.getThreadMXBean();
 
-    return new ServerStatusSnapshot(
+    var snapshot = new ServerStatusSnapshot(
       now.toString(),
-      cpuUsagePercent,
+      Math.max(0, cpuUsagePercent),
       loadReading.loadOne(),
       loadReading.loadFive(),
       loadReading.loadFifteen(),
@@ -74,8 +76,8 @@ public class ServerStatusCollector {
       disk.usagePercent() == null ? 0 : disk.usagePercent(),
       networkReading.rxBytes(),
       networkReading.txBytes(),
-      networkRate.rxBytesPerSecond(),
-      networkRate.txBytesPerSecond(),
+      Math.max(0, networkRate.rxBytesPerSecond()),
+      Math.max(0, networkRate.txBytesPerSecond()),
       readUptimeSeconds(),
       ManagementFactory.getRuntimeMXBean().getUptime() / 1000,
       runtime.totalMemory() - runtime.freeMemory(),
@@ -83,6 +85,7 @@ public class ServerStatusCollector {
       threadMXBean.getThreadCount(),
       readDatabaseSizeBytes()
     );
+    return new Sample(snapshot, cpuUsagePercent >= 0, networkRate.rxBytesPerSecond() >= 0);
   }
 
   public ServerSystemInfo collectSystemInfo() {
@@ -101,20 +104,13 @@ public class ServerStatusCollector {
     );
   }
 
-  private double calculateCpuUsage(CpuReading current, Instant now) {
-    if (current.totalTicks() <= 0) {
-      return 0;
-    }
-    CpuSample previous = previousCpuSample;
-    previousCpuSample = new CpuSample(current, now);
-    if (previous == null) {
-      return 0;
-    }
-    long totalDelta = current.totalTicks() - previous.reading().totalTicks();
-    long idleDelta = current.idleTicks() - previous.reading().idleTicks();
-    if (totalDelta <= 0) {
-      return 0;
-    }
+  private double calculateCpuUsage(CpuReading current) {
+    CpuReading previous = previousCpuReading;
+    previousCpuReading = current.totalTicks() > 0 ? current : null;
+    if (previous == null || previousCpuReading == null) return -1;
+    long totalDelta = current.totalTicks() - previous.totalTicks();
+    long idleDelta = current.idleTicks() - previous.idleTicks();
+    if (totalDelta <= 0 || idleDelta < 0 || idleDelta > totalDelta) return -1;
     return clampPercent((double) (totalDelta - idleDelta) * 100 / totalDelta);
   }
 
@@ -122,13 +118,13 @@ public class ServerStatusCollector {
     NetworkSample previous = previousNetworkSample;
     previousNetworkSample = new NetworkSample(current, now);
     if (previous == null || !current.available() || !previous.reading().available()) {
-      return new NetworkRate(0, 0);
+      return new NetworkRate(-1, -1);
     }
+    long rxDelta = current.rxBytes() - previous.reading().rxBytes();
+    long txDelta = current.txBytes() - previous.reading().txBytes();
+    if (rxDelta < 0 || txDelta < 0) return new NetworkRate(-1, -1);
     double seconds = Math.max(Duration.between(previous.sampledAt(), now).toMillis() / 1000.0, 0.001);
-    return new NetworkRate(
-      Math.max((current.rxBytes() - previous.reading().rxBytes()) / seconds, 0),
-      Math.max((current.txBytes() - previous.reading().txBytes()) / seconds, 0)
-    );
+    return new NetworkRate(rxDelta / seconds, txDelta / seconds);
   }
 
   private int readProcessorCount(Runtime runtime) {
@@ -144,7 +140,7 @@ public class ServerStatusCollector {
     }
     String[] parts = lines.get(0).trim().split("\\s+");
     long total = 0;
-    for (int index = 1; index < parts.length; index += 1) {
+    for (int index = 1; index < Math.min(parts.length, 9); index += 1) {
       total += parseLong(parts[index]);
     }
     long idle = parseLong(parts.length > 4 ? parts[4] : "0") + parseLong(parts.length > 5 ? parts[5] : "0");
@@ -351,9 +347,6 @@ public class ServerStatusCollector {
   }
 
   private record CpuReading(long totalTicks, long idleTicks) {
-  }
-
-  private record CpuSample(CpuReading reading, Instant sampledAt) {
   }
 
   private record MemoryReading(long memoryTotalBytes, long memoryAvailableBytes, long swapTotalBytes, long swapFreeBytes) {

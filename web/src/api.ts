@@ -8,17 +8,21 @@ export interface Instance {
   ocpus: number; memoryGb: number; bootVolumeGb: number; publicIp: string; privateIp: string; updatedAt: string;
 }
 export interface InstanceOverview { instance: Instance; cpuUtilization: number | null; memoryUtilization: number | null; egressGbToday: number | null }
-export interface HistoricalInstance { id: string; displayName: string; region: string; shape: string; firstDay: string | null; lastDay: string | null; ocpus: number | null; memoryGb: number | null; bootVolumeGb: number | null; lifecycleState: string | null }
 export interface MetricDates { firstDay: string | null; lastDay: string | null }
-export interface HostHistorySource { host: string; firstDay: string; lastDay: string }
 export interface HostDisk { mount: string; totalBytes: number | null; usedBytes: number | null; usableBytes: number | null; usagePercent: number | null }
 export interface MetricPoint { sampledAt: string; value: number | null }
 export interface HostSnapshot {
   sampledAt: string; cpuUsagePercent: number; memoryUsagePercent: number; diskUsagePercent: number;
   memoryTotalBytes: number; diskTotalBytes: number; diskUsableBytes: number; networkRxBytesPerSecond: number; networkTxBytesPerSecond: number; uptimeSeconds: number;
 }
-export type HostHistoryPoint = Pick<HostSnapshot,
-  "sampledAt" | "cpuUsagePercent" | "memoryUsagePercent" | "diskUsagePercent" | "networkRxBytesPerSecond" | "networkTxBytesPerSecond">
+export interface HostHistoryPoint {
+  sampledAt: string
+  cpuUsagePercent: number | null
+  memoryUsagePercent: number | null
+  diskUsagePercent: number | null
+  networkRxBytesPerSecond: number | null
+  networkTxBytesPerSecond: number | null
+}
 export interface HostSummary {
   current: HostSnapshot | null; history: HostHistoryPoint[]; disks: HostDisk[]; networkAvailable: boolean; systemInfo: {availableProcessors: number};
   alerts: Array<{ title: string; description: string; severity: string }>;
@@ -41,9 +45,17 @@ export interface QuotaItem {
   key: string; name: string; unit: string; limit: number; used: number | null; status: string; scope: string;
   updatedAt: string | null; requestedThrough: string | null;
 }
-export interface QuotaSummary { month: string; runningA1Ocpus: number | null; runningA1MemoryGb: number | null; items: QuotaItem[] }
+export interface VolumeFailure { operation: string; httpStatus: number | null }
+export interface InstanceTrafficMonth {
+  instanceId: string; ingressGiB: number | null; egressGiB: number | null;
+  observedDays: number; completeDays: number; elapsedDays: number;
+}
+export interface QuotaSummary {
+  month: string; runningA1Ocpus: number | null; runningA1MemoryGb: number | null; items: QuotaItem[];
+  instanceTraffic?: InstanceTrafficMonth | null; volumeFailure?: VolumeFailure | null;
+}
 export interface VolumeDetails {
-  snapshot: { status: string; succeededAt: string | null; attemptedAt: string | null; region: string | null; incomplete: boolean };
+  snapshot: { status: string; succeededAt: string | null; attemptedAt: string | null; region: string | null; incomplete: boolean; failure?: VolumeFailure | null };
   volumes: Array<{id: string; name: string; kind: string; sizeGb: number | null; state: string; attachmentState: string | null}>;
 }
 export interface OciStatus { configured: boolean; authMode: string; authModeLabel: string; instanceId: string; tenancyId: string; compartmentId: string; region: string; costEnabled: boolean; networkCompartmentId?: string }

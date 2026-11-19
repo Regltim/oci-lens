@@ -254,7 +254,7 @@ public class OciSyncService {
       } catch (RuntimeException failure) {
         partial = true;
       }
-      LocalDate first = ledger.coverage("traffic", YearMonth.from(today)).isEmpty() ? today.minusDays(7) : today.minusDays(2);
+      LocalDate first = trafficStart(today, ledger.coverage("traffic", YearMonth.from(today)));
       try {
         traffic = publishTraffic(monitoring, vnics, instances.size(), first, today);
         partial |= !instances.isEmpty() && !ledger.covered("traffic", today.minusDays(1));
@@ -291,6 +291,14 @@ public class OciSyncService {
       }
     }
     return new SyncCounts(instances.size(), metrics, traffic, costs, partial);
+  }
+
+  static LocalDate trafficStart(LocalDate today, List<LensLedger.CoverageDay> coverage) {
+    var attempted = coverage.stream().map(LensLedger.CoverageDay::statDate).collect(java.util.stream.Collectors.toSet());
+    LocalDate recent = today.minusDays(2);
+    return YearMonth.from(today).atDay(1).datesUntil(today)
+      .filter(day -> day.isBefore(recent) && !attempted.contains(day.toString()))
+      .findFirst().orElse(recent);
   }
 
   private SyncCounts repair(OciSettings settings, BasicAuthenticationDetailsProvider provider, String source, LocalDate date) {

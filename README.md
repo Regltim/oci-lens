@@ -43,13 +43,13 @@ bash scripts/oci-lens.sh stop
 
 ## 本机、云盘与额度
 
-概览和「监控 → 本机」展示部署主机数据。「设置 → 监控偏好」可为当前浏览器指定默认入口。在 Linux Compose 中，主机采集使用只读挂载。根分区默认读取 `MONITOR_SERVER_ROOT_SOURCE=/`。想缩小挂载范围时，可以设置为根文件系统上一个专用的已存在目录，并用宿主机 `df` 对照。容器内通过挂载点统计文件系统总量、已用量和可用量。
+概览用一张图显示部署主机的 CPU、内存、根分区和网卡趋势。「监控 → 本机」按日期查询历史，包含同机导入的采样。「设置 → 监控偏好」可为当前浏览器指定默认入口。在 Linux Compose 中，主机采集使用只读挂载。根分区默认读取 `MONITOR_SERVER_ROOT_SOURCE=/`。想缩小挂载范围时，可以设置为根文件系统上一个专用的已存在目录，并用宿主机 `df` 对照。容器内通过挂载点统计文件系统总量、已用量和可用量。
 
 要监控额外挂载点，在 Compose override 为 `server` 新增只读 bind mount。例如将宿主机 `/mnt/data` 挂载到 `/host/disks/data`，再设置 `MONITOR_SERVER_EXTRA_DISKS=/mnt/data=/host/disks/data`。多个映射以逗号分隔。本机网卡默认采集宿主机带有系统设备的接口，设置 `MONITOR_SERVER_NETWORK_INTERFACE` 可选定一个接口。本机常规采样默认保存 72 小时，可通过 `MONITOR_SERVER_HISTORY_RETENTION_HOURS` 调整。
 
 新生成的 Cloud Shell 命令包含 `--with-volumes`，为现有动态组另建云盘只读策略。使用 API Key 时，请为调用身份配置作用域内的 `inspect volumes` 和 `inspect volume-attachments`，以及执行 `ListAvailabilityDomains` 和 `ListRegionSubscriptions` 所需的只读权限。权限生效后在概览执行一次同步，再打开实例详情查看云盘。现有主策略与当前账单开关的授权不一致时，先在 OCI IAM 核实已有策略。
 
-「用量与费用 → 免费额度」按 UTC 月展示 A1 计算与 OCI 出站计量，以及采集范围内的云卷分配量。「设置 → 免费额度」可按租户配置阈值。出站以十进制展示，10 TB 等于 10,000 GB。已有数据库保存的额度配置优先。用量同步需要开启账单读取和 `read usage-report`，按官方 SKU 与单位映射，缺少计量时页面显示数据状态。云盘采集使用独立只读权限。 [Oracle Free Tier](https://www.oracle.com/cloud/free/) · [Oracle 核心服务 IAM](https://docs.oracle.com/en-us/iaas/Content/Identity/Reference/corepolicyreference.htm)
+「用量与费用 → 本月使用」展示本机主网卡按 UTC 日汇总的月度流量与覆盖天数，以及 OCI 的 A1、出站计量和采集范围内的云卷分配量。OCI 的计量使用账单读取开关与 `read usage-report` 权限。主网卡趋势来自 OCI Monitoring。云盘采集使用独立只读权限，读取失败时保留最近的可用数据及失败调用。 [Oracle Free Tier](https://www.oracle.com/cloud/free/) · [Oracle 核心服务 IAM](https://docs.oracle.com/en-us/iaas/Content/Identity/Reference/corepolicyreference.htm)
 
 ## 验证与开发
 

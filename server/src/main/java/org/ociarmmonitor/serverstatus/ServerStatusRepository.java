@@ -27,6 +27,10 @@ public class ServerStatusRepository {
   }
 
   public void save(ServerStatusSnapshot snapshot) {
+    save(snapshot, true, true);
+  }
+
+  public void save(ServerStatusSnapshot snapshot, boolean cpuMeasured, boolean networkMeasured) {
     jdbcTemplate.update("""
       INSERT INTO server_status_snapshot(
         sampled_at, cpu_usage_percent, load_one, load_five, load_fifteen,
@@ -64,7 +68,7 @@ public class ServerStatusRepository {
         database_size_bytes = excluded.database_size_bytes
       """,
       snapshot.sampledAt(),
-      snapshot.cpuUsagePercent(),
+      cpuMeasured ? snapshot.cpuUsagePercent() : -1,
       snapshot.loadOne(),
       snapshot.loadFive(),
       snapshot.loadFifteen(),
@@ -79,8 +83,8 @@ public class ServerStatusRepository {
       snapshot.diskUsagePercent(),
       snapshot.networkRxBytes(),
       snapshot.networkTxBytes(),
-      snapshot.networkRxBytesPerSecond(),
-      snapshot.networkTxBytesPerSecond(),
+      networkMeasured ? snapshot.networkRxBytesPerSecond() : -1,
+      networkMeasured ? snapshot.networkTxBytesPerSecond() : -1,
       snapshot.uptimeSeconds(),
       snapshot.processUptimeSeconds(),
       snapshot.jvmMemoryUsedBytes(),
@@ -95,7 +99,7 @@ public class ServerStatusRepository {
     List<ServerMetricPoint> points = jdbcTemplate.query("""
       SELECT sampled_at, cpu_usage_percent, memory_usage_percent, disk_usage_percent,
         network_rx_bytes_per_second, network_tx_bytes_per_second
-      FROM server_status_snapshot
+      FROM host_metric_history
       WHERE sampled_at >= ?
       ORDER BY sampled_at DESC
       LIMIT ?
@@ -105,7 +109,7 @@ public class ServerStatusRepository {
   }
 
   public List<ServerMetricPoint> listHistory(HistoryWindow window, String host) {
-    String source = host.isEmpty() ? "server_status_snapshot" : "legacy_host_snapshot";
+    String source = host.isEmpty() ? "host_metric_history" : "legacy_host_snapshot";
     String hostFilter = host.isEmpty() ? "" : " AND host_label = ?";
     String columns = "cpu_usage_percent, memory_usage_percent, disk_usage_percent, "
       + "network_rx_bytes_per_second, network_tx_bytes_per_second";
@@ -154,18 +158,23 @@ public class ServerStatusRepository {
   private ServerMetricPoint mapMetricPoint(ResultSet resultSet) throws SQLException {
     return new ServerMetricPoint(
       resultSet.getString("sampled_at"),
-      resultSet.getDouble("cpu_usage_percent"),
-      resultSet.getDouble("memory_usage_percent"),
-      resultSet.getDouble("disk_usage_percent"),
-      resultSet.getDouble("network_rx_bytes_per_second"),
-      resultSet.getDouble("network_tx_bytes_per_second")
+      nullableMetric(resultSet, "cpu_usage_percent"),
+      nullableMetric(resultSet, "memory_usage_percent"),
+      nullableMetric(resultSet, "disk_usage_percent"),
+      nullableMetric(resultSet, "network_rx_bytes_per_second"),
+      nullableMetric(resultSet, "network_tx_bytes_per_second")
     );
+  }
+
+  private Double nullableMetric(ResultSet row, String column) throws SQLException {
+    double value = row.getDouble(column);
+    return row.wasNull() ? null : value;
   }
 
   private ServerStatusSnapshot mapSnapshot(ResultSet resultSet) throws SQLException {
     return new ServerStatusSnapshot(
       resultSet.getString("sampled_at"),
-      resultSet.getDouble("cpu_usage_percent"),
+      Math.max(0, resultSet.getDouble("cpu_usage_percent")),
       resultSet.getDouble("load_one"),
       resultSet.getDouble("load_five"),
       resultSet.getDouble("load_fifteen"),
@@ -180,8 +189,8 @@ public class ServerStatusRepository {
       resultSet.getDouble("disk_usage_percent"),
       resultSet.getLong("network_rx_bytes"),
       resultSet.getLong("network_tx_bytes"),
-      resultSet.getDouble("network_rx_bytes_per_second"),
-      resultSet.getDouble("network_tx_bytes_per_second"),
+      Math.max(0, resultSet.getDouble("network_rx_bytes_per_second")),
+      Math.max(0, resultSet.getDouble("network_tx_bytes_per_second")),
       resultSet.getLong("uptime_seconds"),
       resultSet.getLong("process_uptime_seconds"),
       resultSet.getLong("jvm_memory_used_bytes"),

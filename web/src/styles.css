@@ -479,3 +479,10 @@ label.checkbox input { accent-color: var(--primary); min-height: auto; }
   .instance-filters input, .instance-filters select { font-size: 16px; }
   .segment > span { min-width: 45px; min-height: 34px; padding: 0 9px; }
 }
+
+.quota-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px 26px; margin: 0; padding: 0; list-style: none; }
+.quota-line { display: grid; gap: 6px; align-content: start; padding: 9px 0; border-top: 1px solid var(--divider); }
+.quota-value { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; font-size: 14px; }
+.quota-value span { font-variant-numeric: tabular-nums; }
+.quota-note { color: var(--muted-foreground); font-size: 12px; }
+@media (max-width: 600px) { .quota-list { grid-template-columns: 1fr; gap: 4px; } }

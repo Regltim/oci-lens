@@ -2,7 +2,6 @@ package org.ociarmmonitor.config;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
-import java.time.Instant;
 import java.util.List;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -25,9 +24,7 @@ public class FreeQuotaRepository {
       WHERE id = ?
       """, (resultSet, rowNum) -> mapQuota(resultSet), QUOTA_ID);
     if (quotas.isEmpty()) {
-      FreeQuota defaultQuota = new FreeQuota(1500, 9000, 200, 10240, 500000000, 1000000000, Instant.now().toString());
-      save(defaultQuota);
-      return defaultQuota;
+      return new FreeQuota(1500, 9000, 200, 10000, 500000000, 1000000000, "");
     }
     return quotas.get(0);
   }

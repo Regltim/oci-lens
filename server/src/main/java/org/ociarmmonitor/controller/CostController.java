@@ -34,6 +34,11 @@ public class CostController {
     this.manual = manual;
   }
 
+  @GetMapping("/months")
+  public ApiResponse<List<String>> listMonths() {
+    return ApiResponse.ok(ledger.costMonths());
+  }
+
   @GetMapping("/summary")
   public ApiResponse<Summary> getSummary(@RequestParam(required = false) YearMonth month) {
     YearMonth requested = month == null ? YearMonth.now(ZoneOffset.UTC) : month;

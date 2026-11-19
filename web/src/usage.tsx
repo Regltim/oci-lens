@@ -2,10 +2,11 @@ import { useState, type FormEvent } from "react"
 import { Navigate, Route, Routes, useSearchParams } from "react-router-dom"
 import { Button } from "@/components/glass/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/glass/table"
-import { query, request, useRead, type Budget, type CostSummary, type CoverageDay, type InstanceOverview, type ManualCost, type TrafficSummary } from "./api"
+import { query, request, useRead, type Budget, type CostSummary, type CoverageDay, type HistoricalInstance, type InstanceOverview, type ManualCost, type TrafficSummary } from "./api"
 import { trafficDays } from "./overview"
 import { SeriesChart } from "./traffic-chart"
 import { Heading, Metric, Panel, State, Tabs, formatNumber, money, utcMonth } from "./ui"
+import { QuotaPanel } from "./quota"
 import { FormFeedback } from "./settings/form"
 
 function Coverage({ rows, source, reload }: { rows: CoverageDay[]; source: "traffic" | "cost"; reload: () => void }) {
@@ -31,25 +32,43 @@ function Coverage({ rows, source, reload }: { rows: CoverageDay[]; source: "traf
   </Panel>
 }
 
+function MonthFilter({month, available, onChange}: {month: string; available: string[]; onChange: (month: string) => void}) {
+  return <>
+    <label>月份<input type="month" value={month} onChange={event => onChange(event.target.value)} /></label>
+    {available.length > 0 && <label>有记录的月份<select value={available.includes(month) ? month : ""} onChange={event => onChange(event.target.value)}>
+      <option value="" disabled>选择月份</option>
+      {available.map(item => <option key={item}>{item}</option>)}
+    </select></label>}
+  </>
+}
+
 function Traffic() {
   const [params, setParams] = useSearchParams()
-  const month = params.get("month") || utcMonth()
+  const source = params.get("source") === "legacy" ? "legacy" : "current"
+  const archived = source === "legacy"
+  const months = useRead<string[]>(query("/traffic/months", {source}))
+  const month = params.get("month") || (archived ? months.data?.[0] : null) || utcMonth()
   const instanceId = params.get("instance") || ""
   const instances = useRead<InstanceOverview[]>("/instances")
-  const traffic = useRead<TrafficSummary>(query("/traffic/summary", {month, instanceId}))
+  const historical = useRead<HistoricalInstance[]>("/instances/history")
+  const options = [...(instances.data ?? []).map(row => row.instance), ...(historical.data ?? [])]
+  const traffic = useRead<TrafficSummary>(query("/traffic/summary", {month, instanceId, source}))
   const rows = trafficDays(traffic.data?.daily ?? [], traffic.data?.coverage ?? [])
   const valid = rows.filter(([,row]) => row.egress != null)
   return <>
-    <Panel title="主网卡流量" subtitle="按 UTC 日汇总。VNIC 出站与公网账单分别查看。" className="block-panel">
-      <div className="filter-row usage-filters"><label>月份<input type="month" value={month} onChange={event => setParams({month:event.target.value,instance:instanceId})} /></label>
-        <label>实例<select value={instanceId} onChange={event => setParams({month,instance:event.target.value})}><option value="">全部</option>{instances.data?.map(({instance}) => <option key={instance.id} value={instance.id}>{instance.displayName}</option>)}</select></label></div>
+    <Panel title={archived ? "旧站主网卡流量" : "主网卡流量"} subtitle={archived ? "按旧站采集窗口归档，日期可能只有部分采样" : "按完整 UTC 日汇总"} className="block-panel">
+      <div className="filter-row usage-filters">
+        <label>数据来源<select value={source} onChange={event => setParams({source:event.target.value})}><option value="current">OCI Lens</option><option value="legacy">旧站采样</option></select></label>
+        <MonthFilter month={month} available={months.data ?? []} onChange={value => setParams({month:value,instance:instanceId,source})} />
+        <label>实例<select value={instanceId} onChange={event => setParams({month,instance:event.target.value,source})}><option value="">全部</option>{options.map(instance => <option key={instance.id} value={instance.id}>{instance.displayName}</option>)}</select></label>
+      </div>
       <State pending={traffic.pending} error={traffic.error} retry={traffic.retry} empty={traffic.data && !rows.length ? "当前月份暂无流量快照。" : undefined} />
       {valid.length > 0 && <SeriesChart points={rows.map(([day, item]) => ({label:day.slice(5),value:item.egress}))} label="主网卡出站" unit="GiB" />}
       {rows.length > 0 && <Table className="usage-data-table" aria-label="主网卡流量"><TableHeader><TableRow><TableHead>UTC 日期</TableHead><TableHead numeric>入站 GiB</TableHead><TableHead numeric>出站 GiB</TableHead></TableRow></TableHeader><TableBody>
         {rows.slice().reverse().map(([day,value]) => <TableRow key={day}><TableCell>{day}</TableCell><TableCell numeric>{formatNumber(value.ingress, 2)}</TableCell><TableCell numeric>{formatNumber(value.egress, 2)}</TableCell></TableRow>)}
       </TableBody></Table>}
     </Panel>
-    <Coverage rows={traffic.data?.coverage ?? []} source="traffic" reload={traffic.retry} />
+    {!archived && <Coverage rows={traffic.data?.coverage ?? []} source="traffic" reload={traffic.retry} />}
   </>
 }
 
@@ -136,20 +155,32 @@ function Costs() {
   const month = params.get("month") || utcMonth()
   const currency = params.get("currency") || ""
   const costs = useRead<CostSummary>(query("/costs/summary", {month}))
+  const months = useRead<string[]>("/costs/months")
   const currencies = [...new Set([...(costs.data?.daily ?? []).map(row => row.currency),...(costs.data?.manualCosts ?? []).map(row => row.currency)])].sort()
   const filterCurrency = currencies.includes(currency) ? currency : ""
   const selected = filterCurrency || (currencies.length === 1 ? currencies[0] : "")
   const rows = (costs.data?.daily ?? []).filter(row => !selected || selected === row.currency)
+  const pageSize = 100
+  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize))
+  const page = Math.max(1, Math.min(pageCount, Math.trunc(Number(params.get("page")) || 1)))
   const perCurrency = new Map<string, number>()
   for (const row of rows) perCurrency.set(row.currency, (perCurrency.get(row.currency) ?? 0) + Number(row.costAmount))
   return <>
     <Panel title="OCI 账单" subtitle={costs.data?.through ? `已核对至 ${costs.data.through} UTC` : "账单有延迟，按 UTC 自然月统计"} className="block-panel">
-      <div className="filter-row usage-filters"><label>月份<input type="month" value={month} onChange={event => setParams({month:event.target.value})} /></label><label>币种<select value={filterCurrency} onChange={event => setParams({month,currency:event.target.value})}><option value="">全部</option>{currencies.map(value => <option key={value}>{value}</option>)}</select></label></div>
+      <div className="filter-row usage-filters">
+        <MonthFilter month={month} available={months.data ?? []} onChange={value => setParams({month:value,currency:filterCurrency})} />
+        <label>币种<select value={filterCurrency} onChange={event => setParams({month,currency:event.target.value})}><option value="">全部</option>{currencies.map(value => <option key={value}>{value}</option>)}</select></label>
+      </div>
       <State pending={costs.pending} error={costs.error} retry={costs.retry} empty={costs.data && !rows.length ? "当前没有已入账明细。" : undefined} />
       {perCurrency.size > 0 && <div className="metric-grid">{[...perCurrency].map(([key,value]) => <Metric key={key} label={`已入账 · ${key}`} value={formatNumber(value, 2)} unit={key} />)}</div>}
       {rows.length > 0 && <Table className="usage-data-table usage-billing-table" aria-label="OCI 账单明细"><TableHeader><TableRow><TableHead>UTC 日期</TableHead><TableHead>服务</TableHead><TableHead numeric>费用</TableHead></TableRow></TableHeader><TableBody>
-        {rows.slice(0,100).map((row,index) => <TableRow key={`${row.statDate}-${index}`}><TableCell>{row.statDate}</TableCell><TableCell>{row.serviceName || "未归属"}</TableCell><TableCell numeric>{money(row.costAmount,row.currency)}</TableCell></TableRow>)}
+        {rows.slice((page - 1) * pageSize, page * pageSize).map((row,index) => <TableRow key={`${row.statDate}-${index}`}><TableCell>{row.statDate}</TableCell><TableCell>{row.serviceName || "未归属"}</TableCell><TableCell numeric>{money(row.costAmount,row.currency)}</TableCell></TableRow>)}
       </TableBody></Table>}
+      {pageCount > 1 && <div className="filter-row">
+        <Button variant="link" disabled={page <= 1} onClick={() => setParams({month,currency:filterCurrency,page:String(page - 1)})}>上一页</Button>
+        <span className="state-note">{page} / {pageCount}</span>
+        <Button variant="link" disabled={page >= pageCount} onClick={() => setParams({month,currency:filterCurrency,page:String(page + 1)})}>下一页</Button>
+      </div>}
     </Panel>
     <Coverage rows={costs.data?.coverage ?? []} source="cost" reload={costs.retry} />
     <BudgetPanel key={`${month}/${selected || "USD"}`} month={month} currency={selected || "USD"} />
@@ -158,7 +189,7 @@ function Costs() {
 }
 
 export function Usage() {
-  return <><Heading title="用量与费用" subtitle="从本地快照查看流量和已入账金额" /><Tabs label="用量页面" items={[{to:"/usage/traffic",label:"流量"},{to:"/usage/cost",label:"费用"}]} />
-    <Routes><Route index element={<Navigate to="traffic" replace />} /><Route path="traffic" element={<Traffic />} /><Route path="cost" element={<Costs />} /><Route path="*" element={<Navigate to="traffic" replace />} /></Routes>
+  return <><Heading title="用量与费用" subtitle="从本地快照查看流量和已入账金额" /><Tabs label="用量页面" items={[{to:"/usage/traffic",label:"流量"},{to:"/usage/cost",label:"费用"},{to:"/usage/quota",label:"免费额度"}]} />
+    <Routes><Route index element={<Navigate to="traffic" replace />} /><Route path="traffic" element={<Traffic />} /><Route path="cost" element={<Costs />} /><Route path="quota" element={<QuotaPanel />} /><Route path="*" element={<Navigate to="traffic" replace />} /></Routes>
   </>
 }

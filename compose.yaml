@@ -19,6 +19,10 @@ services:
       OCI_LENS_BILLING_ENABLED: ${OCI_LENS_BILLING_ENABLED:-false}
       OCI_LENS_REQUESTS_PER_DAY: ${OCI_LENS_REQUESTS_PER_DAY:-80}
       OCI_LENS_POINTS_PER_MONTH: ${OCI_LENS_POINTS_PER_MONTH:-100000000}
+      MONITOR_SERVER_DISK_PATH: /host/disks/root
+      MONITOR_SERVER_NETWORK_INTERFACE: ${MONITOR_SERVER_NETWORK_INTERFACE:-}
+      MONITOR_SERVER_EXTRA_DISKS: ${MONITOR_SERVER_EXTRA_DISKS:-}
+      MONITOR_SERVER_HISTORY_RETENTION_HOURS: ${MONITOR_SERVER_HISTORY_RETENTION_HOURS:-72}
       MONITOR_COOKIE_SECURE: ${MONITOR_COOKIE_SECURE:-false}
       MONITOR_PUBLIC_URL: ${MONITOR_PUBLIC_URL:-}
       MONITOR_SETTINGS_ENCRYPTION_KEY: ${MONITOR_SETTINGS_ENCRYPTION_KEY:-}
@@ -26,6 +30,13 @@ services:
       - lens-data:/data
       - ./secrets/oci:/home/monitor/.oci:ro
       - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - type: bind
+        source: ${MONITOR_SERVER_ROOT_SOURCE:-/}
+        target: /host/disks/root
+        read_only: true
+        bind:
+          create_host_path: false
     secrets: [admin_password]
     healthcheck:
       test: ["CMD-SHELL", "timeout 5 bash -c 'exec 3<>/dev/tcp/127.0.0.1/9090; printf \"GET /api/v1/health HTTP/1.0\\r\\n\\r\\n\" >&3; head -1 <&3 | grep -q \" 200 \"'"]

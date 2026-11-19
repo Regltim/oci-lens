@@ -1,6 +1,7 @@
 package org.ociarmmonitor.serverstatus;
 
 import java.sql.ResultSet;
+import org.ociarmmonitor.common.HistoryWindow;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -102,6 +103,32 @@ public class ServerStatusRepository {
     Collections.reverse(points);
     return points;
   }
+
+  public List<ServerMetricPoint> listHistory(HistoryWindow window, String host) {
+    String source = host.isEmpty() ? "server_status_snapshot" : "legacy_host_snapshot";
+    String hostFilter = host.isEmpty() ? "" : " AND host_label = ?";
+    String columns = "cpu_usage_percent, memory_usage_percent, disk_usage_percent, "
+      + "network_rx_bytes_per_second, network_tx_bytes_per_second";
+    boolean daily = window.useDailyAverages();
+    String metrics = daily ? java.util.Arrays.stream(columns.split(", "))
+      .map(column -> "AVG(" + column + ") AS " + column).collect(java.util.stream.Collectors.joining(", ")) : columns;
+    String sampleTime = daily ? "substr(sampled_at, 1, 10) || 'T00:00:00Z' AS sampled_at" : "sampled_at";
+    String sql = "SELECT " + sampleTime + ", " + metrics + " FROM " + source
+      + " WHERE sampled_at >= ? AND sampled_at < ?" + hostFilter
+      + (daily ? " GROUP BY substr(sampled_at, 1, 10)" : "") + " ORDER BY sampled_at";
+    Object[] args = host.isEmpty() ? new Object[]{window.start(), window.endExclusive()}
+      : new Object[]{window.start(), window.endExclusive(), host};
+    return jdbcTemplate.query(sql, (row, index) -> mapMetricPoint(row), args);
+  }
+
+  public List<HostHistorySource> listHistorySources() {
+    return jdbcTemplate.query("""
+      SELECT host_label, substr(MIN(sampled_at), 1, 10), substr(MAX(sampled_at), 1, 10)
+      FROM legacy_host_snapshot GROUP BY host_label ORDER BY host_label
+      """, (row, index) -> new HostHistorySource(row.getString(1), row.getString(2), row.getString(3)));
+  }
+
+  public record HostHistorySource(String host, String firstDay, String lastDay) {}
 
   public Optional<ServerStatusSnapshot> latest() {
     List<ServerStatusSnapshot> snapshots = jdbcTemplate.query("""

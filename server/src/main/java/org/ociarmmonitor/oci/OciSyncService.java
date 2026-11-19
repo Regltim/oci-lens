@@ -71,6 +71,8 @@ public class OciSyncService {
   private final OciTarget target;
   private final SyncRunRepository syncRunRepository;
   private final TaskExecutor syncTaskExecutor;
+  private final OciVolumeService volumes;
+  private final OciQuotaService quotas;
   private final AtomicBoolean syncRunning = new AtomicBoolean(false);
 
   public OciSyncService(
@@ -84,7 +86,9 @@ public class OciSyncService {
     TransactionTemplate transactions,
     OciTarget target,
     SyncRunRepository syncRunRepository,
-    @Qualifier("syncTaskExecutor") TaskExecutor syncTaskExecutor
+    @Qualifier("syncTaskExecutor") TaskExecutor syncTaskExecutor,
+    OciVolumeService volumes,
+    OciQuotaService quotas
   ) {
     this.ociSettingsProvider = ociSettingsProvider;
     this.ociClientFactory = ociClientFactory;
@@ -97,6 +101,8 @@ public class OciSyncService {
     this.target = target;
     this.syncRunRepository = syncRunRepository;
     this.syncTaskExecutor = syncTaskExecutor;
+    this.volumes = volumes;
+    this.quotas = quotas;
   }
 
   public SyncResult syncResources() {
@@ -271,6 +277,17 @@ public class OciSyncService {
       } catch (RuntimeException failure) {
         partial = true;
         markGap("cost", first, today, "费用读取失败，可在连接诊断查看权限");
+      }
+    }
+    String tenancyId = resolveTenantId(settings, provider);
+    volumes.refresh(settings, provider, tenancyId);
+    if (ociSettingsProvider.billingEnabled()) {
+      try (UsageapiClient usage = ociClientFactory.usageapiClient(provider, settings.region())) {
+        quotas.refresh(usage, tenancyId, today);
+      } catch (OciBudgetGate.BudgetExceeded exhausted) {
+        throw exhausted;
+      } catch (RuntimeException failure) {
+        quotas.recordFailure(YearMonth.from(today), OciVolumeService.sourceFailure(failure), Instant.now().toString());
       }
     }
     return new SyncCounts(instances.size(), metrics, traffic, costs, partial);
@@ -524,7 +541,7 @@ public class OciSyncService {
       return settings.tenancyOcid();
     }
     if (provider instanceof AuthenticationDetailsProvider authenticationDetailsProvider) {
-      return authenticationDetailsProvider.getTenantId();
+      return blankToDefault(authenticationDetailsProvider.getTenantId(), "");
     }
     return "";
   }

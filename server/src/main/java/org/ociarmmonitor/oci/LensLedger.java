@@ -52,6 +52,14 @@ public class LensLedger {
     return through;
   }
 
+  public List<String> costMonths() {
+    return jdbc.queryForList("""
+      SELECT substr(stat_date, 1, 7) AS month FROM cost_daily
+      UNION SELECT substr(occurred_on, 1, 7) FROM manual_cost
+      ORDER BY month DESC
+      """, String.class);
+  }
+
   public List<CostEntry> costs(YearMonth month) {
     return jdbc.query("SELECT service_name, resource_id, stat_date, currency, cost_amount FROM cost_daily WHERE stat_date LIKE ? ORDER BY stat_date DESC, service_name, currency",
       (rs, i) -> new CostEntry(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5)), month + "%");

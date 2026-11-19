@@ -1,15 +1,16 @@
 package org.ociarmmonitor.serverstatus;
 
-import java.io.File;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadMXBean;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
+import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -22,13 +23,20 @@ public class ServerStatusCollector {
   private final Path procPath;
   private final Path fallbackProcPath;
   private final Path diskPath;
+
+  @Value("${monitor.server.extra-disks:}")
+  private String extraDisks = "";
+
+  @Value("${monitor.server.network-interface:}")
+  private String networkInterface = "";
+
   private final String datasourceUrl;
   private CpuSample previousCpuSample;
   private NetworkSample previousNetworkSample;
 
   public ServerStatusCollector(
     @Value("${monitor.server.proc-path:/host/proc}") String procPath,
-    @Value("${monitor.server.disk-path:/data}") String diskPath,
+    @Value("${monitor.server.disk-path:/}") String diskPath,
     @Value("${spring.datasource.url}") String datasourceUrl
   ) {
     this.procPath = Path.of(procPath);
@@ -45,7 +53,7 @@ public class ServerStatusCollector {
     NetworkRate networkRate = calculateNetworkRate(networkReading, now);
     MemoryReading memoryReading = readMemoryReading();
     LoadReading loadReading = readLoadReading();
-    DiskReading diskReading = readDiskReading();
+    HostDisk disk = readDisk("/", diskPath);
     Runtime runtime = Runtime.getRuntime();
     ThreadMXBean threadMXBean = ManagementFactory.getThreadMXBean();
 
@@ -61,9 +69,9 @@ public class ServerStatusCollector {
       memoryReading.swapTotalBytes(),
       memoryReading.swapFreeBytes(),
       percent(memoryReading.swapTotalBytes() - memoryReading.swapFreeBytes(), memoryReading.swapTotalBytes()),
-      diskReading.totalBytes(),
-      diskReading.usableBytes(),
-      percent(diskReading.totalBytes() - diskReading.usableBytes(), diskReading.totalBytes()),
+      disk.totalBytes() == null ? 0 : disk.totalBytes(),
+      disk.usableBytes() == null ? 0 : disk.usableBytes(),
+      disk.usagePercent() == null ? 0 : disk.usagePercent(),
       networkReading.rxBytes(),
       networkReading.txBytes(),
       networkRate.rxBytesPerSecond(),
@@ -84,7 +92,7 @@ public class ServerStatusCollector {
       System.getProperty("os.name", ""),
       System.getProperty("os.version", ""),
       System.getProperty("os.arch", ""),
-      runtime.availableProcessors(),
+      readProcessorCount(runtime),
       readCpuModelName(),
       System.getProperty("java.version", ""),
       System.getProperty("java.vendor", ""),
@@ -113,7 +121,7 @@ public class ServerStatusCollector {
   private NetworkRate calculateNetworkRate(NetworkReading current, Instant now) {
     NetworkSample previous = previousNetworkSample;
     previousNetworkSample = new NetworkSample(current, now);
-    if (previous == null) {
+    if (previous == null || !current.available() || !previous.reading().available()) {
       return new NetworkRate(0, 0);
     }
     double seconds = Math.max(Duration.between(previous.sampledAt(), now).toMillis() / 1000.0, 0.001);
@@ -121,6 +129,12 @@ public class ServerStatusCollector {
       Math.max((current.rxBytes() - previous.reading().rxBytes()) / seconds, 0),
       Math.max((current.txBytes() - previous.reading().txBytes()) / seconds, 0)
     );
+  }
+
+  private int readProcessorCount(Runtime runtime) {
+    int count = (int) readAllLines(resolveProcFile("stat")).stream()
+      .filter(line -> line.matches("cpu[0-9]+\\s+.*")).count();
+    return count > 0 ? count : runtime.availableProcessors();
   }
 
   private CpuReading readCpuReading() {
@@ -166,30 +180,80 @@ public class ServerStatusCollector {
     );
   }
 
-  private NetworkReading readNetworkReading() {
-    long rxBytes = 0;
-    long txBytes = 0;
-    for (String line : readAllLines(resolveProcFile("net/dev"))) {
-      if (!line.contains(":")) {
-        continue;
-      }
-      String[] nameAndValues = line.trim().split(":");
-      if (nameAndValues.length < 2 || "lo".equals(nameAndValues[0].trim())) {
-        continue;
-      }
-      String[] values = nameAndValues[1].trim().split("\\s+");
-      if (values.length < 16) {
-        continue;
-      }
-      rxBytes += parseLong(values[0]);
-      txBytes += parseLong(values[8]);
-    }
-    return new NetworkReading(rxBytes, txBytes);
+  public boolean networkAvailable() {
+    return readNetworkReading().available();
   }
 
-  private DiskReading readDiskReading() {
-    File disk = Files.exists(diskPath) ? diskPath.toFile() : Path.of("/").toFile();
-    return new DiskReading(disk.getTotalSpace(), disk.getUsableSpace());
+  private NetworkReading readNetworkReading() {
+    Path hostInterfaces = procPath.resolveSibling("sys").resolve("class/net");
+    if (Files.isDirectory(hostInterfaces)) {
+      return readHostInterfaces(hostInterfaces);
+    }
+    Path netDev = Files.isDirectory(procPath) ? procPath.resolve("1/net/dev") : fallbackProcPath.resolve("net/dev");
+    long rxBytes = 0;
+    long txBytes = 0;
+    boolean available = false;
+    for (String line : readAllLines(netDev)) {
+      String[] nameAndValues = line.trim().split(":", 2);
+      if (nameAndValues.length < 2 || !includeNetworkInterface(nameAndValues[0].trim())) continue;
+      String[] values = nameAndValues[1].trim().split("\\s+");
+      if (values.length < 16) continue;
+      rxBytes += parseLong(values[0]);
+      txBytes += parseLong(values[8]);
+      available = true;
+    }
+    return new NetworkReading(rxBytes, txBytes, available);
+  }
+
+  private NetworkReading readHostInterfaces(Path interfaces) {
+    long rxBytes = 0;
+    long txBytes = 0;
+    boolean available = false;
+    try (var paths = Files.list(interfaces)) {
+      for (Path path : paths.toList()) {
+        if (!includeNetworkInterface(path.getFileName().toString())
+          || (networkInterface.isBlank() && !Files.exists(path.resolve("device")))) continue;
+        long rx = Long.parseLong(Files.readString(path.resolve("statistics/rx_bytes")).strip());
+        long tx = Long.parseLong(Files.readString(path.resolve("statistics/tx_bytes")).strip());
+        rxBytes += rx;
+        txBytes += tx;
+        available = true;
+      }
+    } catch (IOException | NumberFormatException | SecurityException exception) {
+      return new NetworkReading(0, 0, false);
+    }
+    return new NetworkReading(rxBytes, txBytes, available);
+  }
+
+  private boolean includeNetworkInterface(String name) {
+    return networkInterface.isBlank() ? !name.equals("lo") : networkInterface.equals(name);
+  }
+
+  public List<HostDisk> collectDisks() {
+    List<HostDisk> disks = new ArrayList<>();
+    disks.add(readDisk("/", diskPath));
+    for (String item : extraDisks.split(",")) {
+      String[] mapping = item.strip().split("=", 2);
+      if (mapping.length == 2 && mapping[0].startsWith("/") && !mapping[0].equals("/") && mapping[1].startsWith("/")) {
+        disks.add(readDisk(mapping[0], Path.of(mapping[1])));
+      }
+    }
+    return disks;
+  }
+
+  private HostDisk readDisk(String mount, Path path) {
+    try {
+      FileStore store = Files.getFileStore(path);
+      long total = store.getTotalSpace();
+      long used = Math.max(0, total - store.getUnallocatedSpace());
+      long usable = store.getUsableSpace();
+      if (total > 0) {
+        return new HostDisk(mount, total, used, usable, percent(used, used + usable));
+      }
+    } catch (IOException | SecurityException exception) {
+      return new HostDisk(mount, null, null, null, null);
+    }
+    return new HostDisk(mount, null, null, null, null);
   }
 
   private long readUptimeSeconds() {
@@ -298,15 +362,12 @@ public class ServerStatusCollector {
   private record LoadReading(double loadOne, double loadFive, double loadFifteen) {
   }
 
-  private record NetworkReading(long rxBytes, long txBytes) {
+  private record NetworkReading(long rxBytes, long txBytes, boolean available) {
   }
 
   private record NetworkSample(NetworkReading reading, Instant sampledAt) {
   }
 
   private record NetworkRate(double rxBytesPerSecond, double txBytesPerSecond) {
-  }
-
-  private record DiskReading(long totalBytes, long usableBytes) {
   }
 }

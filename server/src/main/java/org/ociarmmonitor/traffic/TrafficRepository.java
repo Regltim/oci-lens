@@ -50,6 +50,19 @@ public class TrafficRepository {
       """, (resultSet, rowNum) -> mapTraffic(resultSet), monthPrefix + "%");
   }
 
+  public List<TrafficDaily> listLegacyMonth(YearMonth month) {
+    return jdbcTemplate.query("""
+      SELECT instance_id, stat_date, ingress_gb, egress_gb FROM legacy_traffic_daily
+      WHERE stat_date >= ? AND stat_date < ? ORDER BY stat_date
+      """, (row, index) -> mapTraffic(row), month.atDay(1).toString(), month.plusMonths(1).atDay(1).toString());
+  }
+
+  public List<String> listMonths(boolean legacy) {
+    String table = legacy ? "legacy_traffic_daily" : "traffic_daily";
+    return jdbcTemplate.queryForList("SELECT DISTINCT substr(stat_date, 1, 7) AS month FROM "
+      + table + " ORDER BY month DESC", String.class);
+  }
+
   public double sumIngressForCurrentMonth() {
     return sumMonth("ingress_gb", YearMonth.now());
   }

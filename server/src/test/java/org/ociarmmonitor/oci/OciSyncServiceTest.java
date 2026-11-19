@@ -210,7 +210,9 @@ class OciSyncServiceTest {
       transactions,
       target,
       syncRunRepository,
-      taskExecutor
+      taskExecutor,
+      org.mockito.Mockito.mock(OciVolumeService.class),
+      org.mockito.Mockito.mock(OciQuotaService.class)
     );
   }
 

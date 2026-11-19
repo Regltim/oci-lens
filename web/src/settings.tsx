@@ -1,3 +1,4 @@
+import { getMonitorView, setMonitorView, type MonitorView } from "./monitor-preference"
 import { useEffect, useState, type FormEvent } from "react"
 import { Navigate, Route, Routes } from "react-router-dom"
 import { Button } from "@/components/glass/button"
@@ -5,6 +6,7 @@ import { request, useRead, type AuthSession, type WechatStatus } from "./api"
 import { Badge, Heading, Panel, State, Tabs, formatTime } from "./ui"
 import { ConnectionSettings } from "./settings/connection"
 import { FormFeedback, SettingSwitch } from "./settings/form"
+import { QuotaSettingsPanel } from "./settings/quota"
 import { ScheduleSettings } from "./settings/schedule"
 
 type AccountProps = { session: AuthSession; onAccountUpdated: (session: AuthSession) => void; onLogout: () => void; logoutPending: boolean }
@@ -151,9 +153,20 @@ function PublicReport({id, token}: PublicReportLink) {
   </main>
 }
 
+function MonitorSettings() {
+  const [view, setView] = useState<MonitorView>(getMonitorView)
+  return <Panel title="默认监控视图" subtitle="设置保存在当前浏览器">
+    <div className="filter-row"><label>打开监控时显示<select value={view} onChange={event => {
+      const next = event.target.value === "instances" ? "instances" : "host"
+      setView(next)
+      setMonitorView(next)
+    }}><option value="host">本机</option><option value="instances">云实例</option></select></label></div>
+  </Panel>
+}
+
 export function Settings(props: AccountProps | {report: PublicReportLink}) {
   if ("report" in props) return <PublicReport {...props.report} />
-  return <section className="settings-page"><Heading title="设置" /><Tabs label="设置页面" items={[{to:"/settings/oci",label:"OCI 接入"},{to:"/settings/sync",label:"同步计划"},{to:"/settings/account",label:"账号"},{to:"/settings/notifications",label:"通知"}]} />
-    <Routes><Route index element={<Navigate to="oci" replace />} /><Route path="oci" element={<ConnectionSettings />} /><Route path="sync" element={<ScheduleSettings />} /><Route path="account" element={<Account {...props} />} /><Route path="notifications" element={<Notifications />} /><Route path="*" element={<Navigate to="oci" replace />} /></Routes>
+  return <section className="settings-page"><Heading title="设置" /><Tabs label="设置页面" items={[{to:"/settings/monitor",label:"监控偏好"},{to:"/settings/oci",label:"OCI 接入"},{to:"/settings/sync",label:"同步计划"},{to:"/settings/quota",label:"免费额度"},{to:"/settings/account",label:"账号"},{to:"/settings/notifications",label:"通知"}]} />
+    <Routes><Route index element={<Navigate to="oci" replace />} /><Route path="monitor" element={<MonitorSettings />} /><Route path="oci" element={<ConnectionSettings />} /><Route path="sync" element={<ScheduleSettings />} /><Route path="quota" element={<QuotaSettingsPanel />} /><Route path="account" element={<Account {...props} />} /><Route path="notifications" element={<Notifications />} /><Route path="*" element={<Navigate to="oci" replace />} /></Routes>
   </section>
 }

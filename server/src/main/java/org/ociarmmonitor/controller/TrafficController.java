@@ -24,13 +24,26 @@ public class TrafficController {
     this.ledger = ledger;
   }
 
+  @GetMapping("/months")
+  public ApiResponse<List<String>> listMonths(@RequestParam(defaultValue = "current") String source) {
+    return ApiResponse.ok(trafficRepository.listMonths(legacy(source)));
+  }
+
+  private boolean legacy(String source) {
+    if ("legacy".equals(source)) return true;
+    if ("current".equals(source)) return false;
+    throw new IllegalArgumentException("流量数据来源无效。");
+  }
+
   @GetMapping("/summary")
   public ApiResponse<Summary> getSummary(@RequestParam(required = false) YearMonth month,
-                                         @RequestParam(defaultValue = "") String instanceId) {
+                                         @RequestParam(defaultValue = "") String instanceId,
+                                         @RequestParam(defaultValue = "current") String source) {
     YearMonth requested = month == null ? YearMonth.now(ZoneOffset.UTC) : month;
-    List<TrafficDaily> rows = trafficRepository.listMonth(requested).stream()
+    boolean archived = legacy(source);
+    List<TrafficDaily> rows = (archived ? trafficRepository.listLegacyMonth(requested) : trafficRepository.listMonth(requested)).stream()
       .filter(row -> instanceId.isBlank() || row.instanceId().equals(instanceId)).toList();
-    return ApiResponse.ok(new Summary(rows, ledger.coverage("traffic", requested)));
+    return ApiResponse.ok(new Summary(rows, archived ? List.of() : ledger.coverage("traffic", requested)));
   }
 
   public record Summary(List<TrafficDaily> daily, List<LensLedger.CoverageDay> coverage) {}

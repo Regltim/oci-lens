@@ -48,7 +48,9 @@ monitor:
     metrics-sample-delay-millis: ${MONITOR_SERVER_METRICS_SAMPLE_DELAY_MILLIS:300000}
     history-retention-hours: ${MONITOR_SERVER_HISTORY_RETENTION_HOURS:72}
     proc-path: ${MONITOR_SERVER_PROC_PATH:/host/proc}
-    disk-path: ${MONITOR_SERVER_DISK_PATH:/data}
+    disk-path: ${MONITOR_SERVER_DISK_PATH:/}
+    extra-disks: ${MONITOR_SERVER_EXTRA_DISKS:}
+    network-interface: ${MONITOR_SERVER_NETWORK_INTERFACE:}
   wechat:
     enabled: ${MONITOR_WECHAT_ENABLED:false}
     app-id: ${MONITOR_WECHAT_APP_ID:}

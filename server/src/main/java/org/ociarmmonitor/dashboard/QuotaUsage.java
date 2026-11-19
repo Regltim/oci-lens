@@ -2,9 +2,9 @@ package org.ociarmmonitor.dashboard;
 
 public record QuotaUsage(
   String name,
-  double used,
+  Double used,
   double quota,
   String unit,
-  double percent
+  Double percent
 ) {
 }

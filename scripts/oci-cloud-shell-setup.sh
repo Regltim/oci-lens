@@ -6,11 +6,11 @@ fail() { printf '错误：%s\n' "$1" >&2; exit 1; }
 usage() {
   cat <<'HELP'
 用法：bash oci-cloud-shell-setup.sh --tenancy-id OCID --instance-id OCID \
-      --compartment-id OCID [--network-compartment-id OCID] [--with-cost] \
+      --compartment-id OCID [--network-compartment-id OCID] [--with-cost] [--with-volumes] \
       [--allow-tenancy-scope] [--apply]
 
 在租户主区域的 OCI Cloud Shell 中执行。默认仅预览，--apply 创建只读授权。
---with-cost 增加计费租户的账单读取权限。主网卡或子网在其他 Compartment 时，
+--with-cost 增加计费租户的账单读取权限。--with-volumes 单独添加云盘和区域读取策略。主网卡或子网在其他 Compartment 时，
 通过 --network-compartment-id 指定其范围。授权根 Compartment 需要显式添加
 --allow-tenancy-scope，因为此时实例和指标权限会覆盖整个租户。
 HELP
@@ -21,6 +21,7 @@ instance_id=""
 compartment_id=""
 network_compartment_id=""
 with_cost=false
+with_volumes=false
 allow_tenancy_scope=false
 apply=false
 
@@ -36,6 +37,7 @@ while [ "$#" -gt 0 ]; do
       esac
       shift 2 ;;
     --with-cost) with_cost=true; shift ;;
+    --with-volumes) with_volumes=true; shift ;;
     --allow-tenancy-scope) allow_tenancy_scope=true; shift ;;
     --apply) apply=true; shift ;;
     --dry-run) apply=false; shift ;;
@@ -68,6 +70,7 @@ else
 fi
 group_name="oci-lens-${digest:0:16}"
 policy_name="${group_name}-read"
+volume_policy_name="${group_name}-volumes"
 matching_rule="instance.id = '$instance_id'"
 
 statements() {
@@ -85,8 +88,20 @@ statements() {
   fi
 }
 
+volume_statements() {
+  local subject="$1"
+  printf 'Allow %s to inspect volumes %s\n' "$subject" "$compute_scope"
+  printf 'Allow %s to inspect volume-attachments %s\n' "$subject" "$compute_scope"
+  printf "Allow %s to inspect compartments in tenancy where request.operation = 'ListAvailabilityDomains'\n" "$subject"
+  printf "Allow %s to inspect tenancies in tenancy where request.operation = 'ListRegionSubscriptions'\n" "$subject"
+}
+
 printf '动态组 %s\n匹配规则 %s\n策略 %s\n' "$group_name" "$matching_rule" "$policy_name"
 statements "dynamic-group $group_name"
+if "$with_volumes"; then
+  printf '云盘策略 %s\n' "$volume_policy_name"
+  volume_statements "dynamic-group $group_name"
+fi
 if ! "$apply"; then
   printf '\n预览完成。确认授权范围后添加 --apply。\n'
   exit 0
@@ -123,6 +138,19 @@ if [[ "$policy" == null ]]; then
 else
   jq -e --argjson wanted "$wanted" '."lifecycle-state" == "ACTIVE" and ((.statements | sort) == ($wanted | sort))' <<< "$policy" >/dev/null ||
     fail "同名策略处于非活跃状态或授权范围不同。请在 IAM 中核对该策略。"
+fi
+
+if "$with_volumes"; then
+  volume_policy="$(lookup policy "$volume_policy_name")"
+  volume_wanted="$(volume_statements "dynamic-group id $group_id" | jq -Rsc 'split("\n")[:-1]')"
+  if [[ "$volume_policy" == null ]]; then
+    oci iam policy create --compartment-id "$tenancy_id" --name "$volume_policy_name" \
+      --description "Read-only volume inventory for OCI Lens" --statements "$volume_wanted" \
+      --wait-for-state ACTIVE --wait-interval-seconds 5 --max-wait-seconds 120 >/dev/null
+  else
+    jq -e --argjson wanted "$volume_wanted" '."lifecycle-state" == "ACTIVE" and ((.statements | sort) == ($wanted | sort))' <<< "$volume_policy" >/dev/null ||
+      fail "同名云盘策略处于非活跃状态或授权范围不同。请在 IAM 中核对该策略。"
+  fi
 fi
 
 printf '\n只读授权已配置。IAM 生效后，在 OCI Lens 执行连接检查。\n'

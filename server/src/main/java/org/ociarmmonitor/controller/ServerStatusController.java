@@ -8,6 +8,9 @@ import org.ociarmmonitor.serverstatus.ServerStatusService;
 import org.ociarmmonitor.serverstatus.ServerStatusSummary;
 import jakarta.validation.Valid;
 import java.util.List;
+import org.ociarmmonitor.serverstatus.ServerMetricPoint;
+import org.ociarmmonitor.serverstatus.ServerStatusRepository.HostHistorySource;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -30,6 +33,17 @@ public class ServerStatusController {
   @GetMapping("/status")
   public ApiResponse<ServerStatusSummary> getStatus() {
     return ApiResponse.ok(serverStatusService.getSummary());
+  }
+
+  @GetMapping("/history-sources")
+  public ApiResponse<List<HostHistorySource>> listHistorySources() {
+    return ApiResponse.ok(serverStatusService.listHistorySources());
+  }
+
+  @GetMapping("/history")
+  public ApiResponse<List<ServerMetricPoint>> listHistory(@RequestParam String from, @RequestParam String to,
+                                                          @RequestParam(defaultValue = "") String host) {
+    return ApiResponse.ok(serverStatusService.listHistory(from, to, host));
   }
 
   @GetMapping("/alert-rules")

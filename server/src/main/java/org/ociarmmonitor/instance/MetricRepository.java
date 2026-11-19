@@ -1,6 +1,7 @@
 package org.ociarmmonitor.instance;
 
 import java.sql.ResultSet;
+import org.ociarmmonitor.common.HistoryWindow;
 import java.sql.SQLException;
 import java.util.Collections;
 import java.util.List;
@@ -48,6 +49,29 @@ public class MetricRepository {
     Collections.reverse(points);
     return points;
   }
+
+  public List<MetricPoint> findSeries(String instanceId, String metricName, HistoryWindow window) {
+    String sql = window.useDailyAverages() ? """
+      SELECT instance_id, metric_name, AVG(metric_value) AS metric_value, unit,
+        substr(sampled_at, 1, 10) || 'T00:00:00Z' AS sampled_at
+      FROM metric_point WHERE instance_id = ? AND metric_name = ? AND sampled_at >= ? AND sampled_at < ?
+      GROUP BY instance_id, metric_name, unit, substr(sampled_at, 1, 10) ORDER BY sampled_at
+      """ : """
+      SELECT instance_id, metric_name, metric_value, unit, sampled_at
+      FROM metric_point WHERE instance_id = ? AND metric_name = ? AND sampled_at >= ? AND sampled_at < ?
+      ORDER BY sampled_at
+      """;
+    return jdbcTemplate.query(sql, (row, index) -> mapMetric(row), instanceId, metricName, window.start(), window.endExclusive());
+  }
+
+  public MetricDates findDates(String instanceId) {
+    return jdbcTemplate.queryForObject("""
+      SELECT substr(MIN(sampled_at), 1, 10), substr(MAX(sampled_at), 1, 10)
+      FROM metric_point WHERE instance_id = ?
+      """, (row, index) -> new MetricDates(row.getString(1), row.getString(2)), instanceId);
+  }
+
+  public record MetricDates(String firstDay, String lastDay) {}
 
   public double average(String metricName) {
     Double value = jdbcTemplate.queryForObject("""

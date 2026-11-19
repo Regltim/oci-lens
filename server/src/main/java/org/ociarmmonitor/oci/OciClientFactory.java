@@ -7,8 +7,10 @@ import com.oracle.bmc.auth.ConfigFileAuthenticationDetailsProvider;
 import com.oracle.bmc.auth.InstancePrincipalsAuthenticationDetailsProvider;
 import com.oracle.bmc.auth.SimpleAuthenticationDetailsProvider;
 import com.oracle.bmc.auth.SimplePrivateKeySupplier;
+import com.oracle.bmc.core.BlockstorageClient;
 import com.oracle.bmc.core.ComputeClient;
 import com.oracle.bmc.core.VirtualNetworkClient;
+import com.oracle.bmc.identity.IdentityClient;
 import com.oracle.bmc.monitoring.MonitoringClient;
 import com.oracle.bmc.retrier.RetryConfiguration;
 import com.oracle.bmc.usageapi.UsageapiClient;
@@ -79,6 +81,18 @@ public class OciClientFactory {
 
   public MonitoringClient monitoringClient(BasicAuthenticationDetailsProvider provider, String region) {
     MonitoringClient client = MonitoringClient.builder().configuration(clientConfiguration).build(provider);
+    client.setRegion(region);
+    return client;
+  }
+
+  public BlockstorageClient blockstorageClient(BasicAuthenticationDetailsProvider provider, String region) {
+    BlockstorageClient client = BlockstorageClient.builder().configuration(clientConfiguration).build(provider);
+    client.setRegion(region);
+    return client;
+  }
+
+  public IdentityClient identityClient(BasicAuthenticationDetailsProvider provider, String region) {
+    IdentityClient client = IdentityClient.builder().configuration(clientConfiguration).build(provider);
     client.setRegion(region);
     return client;
   }

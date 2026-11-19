@@ -44,6 +44,11 @@ public class SettingsController {
 
   @PutMapping("/quota")
   public ApiResponse<FreeQuota> updateQuota(@RequestBody FreeQuota quota) {
+    if (java.util.stream.DoubleStream.of(quota.ampereOcpuHours(), quota.ampereMemoryGbHours(),
+      quota.blockVolumeGb(), quota.outboundDataTransferGb(), quota.monitoringIngestionPoints(), quota.monitoringRetrievalPoints())
+      .anyMatch(value -> !Double.isFinite(value) || value < 0)) {
+      throw new IllegalArgumentException("各项额度必须为非负数。");
+    }
     FreeQuota nextQuota = new FreeQuota(
       quota.ampereOcpuHours(),
       quota.ampereMemoryGbHours(),

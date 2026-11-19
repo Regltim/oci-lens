@@ -291,3 +291,45 @@ CREATE TABLE IF NOT EXISTS cost_budget (
 CREATE TABLE IF NOT EXISTS maintenance_window (
   id TEXT PRIMARY KEY, reason TEXT NOT NULL, starts_at TEXT NOT NULL, ends_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS instance_history (
+  id TEXT PRIMARY KEY, display_name TEXT NOT NULL, region TEXT NOT NULL, shape TEXT NOT NULL,
+  lifecycle_state TEXT NOT NULL, ocpus REAL NOT NULL, memory_gb REAL NOT NULL, boot_volume_gb REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS legacy_traffic_daily (
+  instance_id TEXT NOT NULL, stat_date TEXT NOT NULL, ingress_gb REAL NOT NULL, egress_gb REAL NOT NULL,
+  PRIMARY KEY (instance_id, stat_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_legacy_traffic_date ON legacy_traffic_daily(stat_date);
+
+CREATE TABLE IF NOT EXISTS legacy_host_snapshot (
+  host_label TEXT NOT NULL, sampled_at TEXT NOT NULL, cpu_usage_percent REAL NOT NULL,
+  memory_usage_percent REAL NOT NULL, disk_usage_percent REAL NOT NULL,
+  network_rx_bytes_per_second REAL NOT NULL, network_tx_bytes_per_second REAL NOT NULL,
+  PRIMARY KEY (host_label, sampled_at)
+);
+
+CREATE TABLE IF NOT EXISTS oci_volume (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL,
+  size_gb INTEGER, state TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oci_volume_attachment (
+  volume_id TEXT NOT NULL, instance_id TEXT NOT NULL, state TEXT NOT NULL,
+  PRIMARY KEY (volume_id, instance_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_oci_volume_attachment_instance ON oci_volume_attachment(instance_id);
+
+CREATE TABLE IF NOT EXISTS oci_volume_snapshot (
+  id INTEGER PRIMARY KEY CHECK (id = 1), status TEXT NOT NULL, attempted_at TEXT NOT NULL,
+  succeeded_at TEXT, region TEXT, compartment_id TEXT, home_region TEXT, incomplete INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS oci_usage_snapshot (
+  month TEXT PRIMARY KEY, status TEXT NOT NULL, attempted_at TEXT NOT NULL,
+  succeeded_at TEXT, requested_through TEXT, compute_region TEXT,
+  ocpu_hours REAL, memory_gb_hours REAL, outbound_gb REAL
+);

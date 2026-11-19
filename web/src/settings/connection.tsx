@@ -16,7 +16,7 @@ function authorization(data: OciStatus) {
   const tenancyScope = data.tenancyId === data.compartmentId || data.tenancyId === network
   const args = [`--tenancy-id ${data.tenancyId}`, `--instance-id ${data.instanceId}`, `--compartment-id ${data.compartmentId}`,
     ...(network ? [`--network-compartment-id ${network}`] : []), ...(tenancyScope ? ["--allow-tenancy-scope"] : []),
-    ...(data.costEnabled ? ["--with-cost"] : []), "--apply"]
+    ...(data.costEnabled ? ["--with-cost"] : []), "--with-volumes", "--apply"]
   const command = ["bash -s --", ...args].join(" \\\n  ") + " <<'OCI_LENS_IAM'"
   return {command, content: `${command}\n${cloudShellScript.trimEnd()}\nOCI_LENS_IAM\n`, tenancyScope}
 }

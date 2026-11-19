@@ -1,6 +1,7 @@
 package org.ociarmmonitor.instance;
 
 import org.ociarmmonitor.cost.CostRepository;
+import org.ociarmmonitor.common.HistoryWindow;
 import org.ociarmmonitor.traffic.TrafficRepository;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -42,6 +43,21 @@ public class CloudInstanceService {
   }
 
   private Double value(OptionalDouble result) { return result.isPresent() ? result.getAsDouble() : null; }
+
+  public MetricRepository.MetricDates metricDates(String instanceId) {
+    return metricRepository.findDates(instanceId);
+  }
+
+  public List<CloudInstanceRepository.HistoricalInstance> listHistory() {
+    return cloudInstanceRepository.listHistory();
+  }
+
+  public List<MetricPoint> listMetricSeries(String instanceId, String metricName, String from, String to) {
+    if (from.isEmpty() && to.isEmpty()) {
+      return listMetricSeries(instanceId, metricName);
+    }
+    return metricRepository.findSeries(instanceId, metricName, HistoryWindow.parse(from, to));
+  }
 
   public List<MetricPoint> listMetricSeries(String instanceId, String metricName) {
     return metricRepository.findSeries(instanceId, metricName, 48);

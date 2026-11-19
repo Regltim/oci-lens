@@ -4,6 +4,7 @@ import { ArrowRight, RefreshCw, ShieldCheck } from "lucide-react"
 import { Button } from "@/components/glass/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/glass/table"
 import { request, useRead, type Choice, type CostSummary, type CoverageDay, type HostSummary, type InstanceOverview, type SyncRun, type SyncSchedule, type SyncStatus, type TrafficDay, type TrafficSummary } from "./api"
+import { QuotaPanel } from "./quota"
 import { SeriesChart } from "./traffic-chart"
 import { Badge, Heading, Metric, Panel, SegmentedChoice, State, formatNumber, formatTime, money, utcMonth } from "./ui"
 
@@ -67,10 +68,9 @@ export function Overview() {
   const last = sync.data?.lastSuccessfulAt || (sync.data?.lastStatus === "SUCCESS" ? sync.data.lastFinishedAt : "")
   const stale = last && Date.now() - Date.parse(last) > 172_800_000
   const daily = new Map(trafficDays([...(prior.data?.daily ?? []), ...(traffic.data?.daily ?? [])]))
-  const out = daily.get(lastDay)?.egress
-  const amounts = new Map<string, number>()
-  for (const item of costs.data?.daily ?? []) amounts.set(item.currency, (amounts.get(item.currency) ?? 0) + Number(item.costAmount))
-  const displayAmount = amounts.size === 1 ? [...amounts].map(([currency, amount]) => money(amount, currency))[0] : "—"
+  const totals = new Map<string, number>()
+  for (const item of costs.data?.daily ?? []) totals.set(item.currency, (totals.get(item.currency) ?? 0) + Number(item.costAmount))
+  const total = totals.size === 1 ? Array.from(totals.entries())[0] : null
   const points = Array.from({length:days}, (_, index) => {
     const day = utcDayBefore(today, days - index)
     return {label:day.slice(5),value:daily.get(day)?.egress ?? null}
@@ -86,10 +86,10 @@ export function Overview() {
     {sync.data && ["FAILED", "PARTIAL", "PAUSED"].includes(sync.data.lastStatus) && <State empty={sync.data.lastMessage} />}
     <div className="overview-grid">
       <div className="metric-grid overview-metrics">
-        <Metric label="运行实例" to="/monitor/instances" value={sync.data?.hasData && instances.data ? String(instances.data.filter(row => row.instance.lifecycleState === "RUNNING").length) : "—"} unit="台" note={cloud ? "最近成功的清单" : "等待 OCI 接入"} />
-        <Metric label="昨日主网卡出站" to="/usage/traffic" value={formatNumber(out, 2)} unit="GiB" note={out == null ? "等待可用流量" : "UTC 日"} />
-        <Metric label="本月 OCI 已入账" to="/usage/cost" value={displayAmount} note={amounts.size > 1 ? "有多个币种，查看明细" : costs.data?.through ? `核对至 ${costs.data.through}` : "等待可用账单"} />
-        <Metric label="本机磁盘已用" to="/monitor/host" value={formatNumber(host.data?.current?.diskUsagePercent)} unit="%" note={host.data?.current ? `采样于 ${formatTime(host.data.current.sampledAt)}` : "等待本机采样"} />
+        <Metric label="本机 CPU" to="/monitor/host" value={formatNumber(host.data?.current?.cpuUsagePercent)} unit="%" note={host.data?.current ? `采样于 ${formatTime(host.data.current.sampledAt)}` : "等待本机采样"} />
+        <Metric label="本机内存" to="/monitor/host" value={formatNumber(host.data?.current?.memoryUsagePercent)} unit="%" />
+        <Metric label="本机根分区" to="/monitor/host" value={formatNumber(host.data?.disks?.find(item => item.mount === "/")?.usagePercent)} unit="%" />
+        <Metric label="本机网卡出站" to="/monitor/host" value={formatNumber(host.data?.networkAvailable && host.data.current ? host.data.current.networkTxBytesPerSecond / 1024 : null, 2)} unit="KiB/s" />
       </div>
       <Panel title="同步状态" className="sync-panel" actions={<Badge ready={Boolean(sync.data && last && !stale)}>{sync.data ? cloud ? syncLabel(sync.data.lastStatus) : "本机模式" : "读取中"}</Badge>}>
         <dl className="sync-times">
@@ -108,6 +108,12 @@ export function Overview() {
         <div className="subtle-row"><ShieldCheck size={14} />页面仅读取本地快照</div>
       </Panel>
     </div>
+    <QuotaPanel compact revision={revision} />
+    {cloud && <div className="metric-grid">
+      <Metric label="运行实例" to="/monitor/instances" value={instances.data && sync.data?.hasData ? String(instances.data.filter(row => row.instance.lifecycleState === "RUNNING").length) : "—"} unit="台" />
+      <Metric label="昨日主网卡出站" to="/usage/traffic" value={formatNumber(daily.get(lastDay)?.egress, 2)} unit="GiB" note="UTC 日" />
+      <Metric label="本月 OCI 已入账" to="/usage/cost" value={total ? money(total[1], total[0]) : "—"} note={totals.size > 1 ? "有多个币种，查看明细" : undefined} />
+    </div>}
     <Panel title="实例快照" className="instance-panel" actions={<Link to="/monitor/instances">查看全部</Link>}>
       <State error={instances.error} retry={instances.retry} pending={instances.pending} />
       {instances.data?.length ? <InstanceTable instances={instances.data.slice(0, 5)} /> : !instances.pending && !instances.error && <State empty="当前没有实例快照。" />}

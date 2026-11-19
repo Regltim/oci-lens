@@ -1,0 +1,69 @@
+server:
+  port: ${OCI_LENS_SERVER_PORT:9090}
+  servlet:
+    context-path: /api/v1
+    session:
+      cookie:
+        name: ${OCI_LENS_COOKIE_NAME:OCI_LENS_SESSION}
+        http-only: true
+        same-site: lax
+        secure: ${MONITOR_COOKIE_SECURE:false}
+
+spring:
+  application:
+    name: oci-lens
+  autoconfigure:
+    exclude: org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+  datasource:
+    driver-class-name: org.sqlite.JDBC
+    url: jdbc:sqlite:${OCI_MONITOR_DB:./oci-lens.db}
+    hikari:
+      maximum-pool-size: 1
+      data-source-properties:
+        journal_mode: WAL
+        foreign_keys: true
+        busy_timeout: 5000
+  sql:
+    init:
+      mode: always
+
+monitor:
+  admin:
+    username: ${MONITOR_ADMIN_USERNAME:admin}
+    password: ${MONITOR_ADMIN_PASSWORD:}
+    password-file: ${OCI_LENS_ADMIN_PASSWORD_FILE:}
+  oci:
+    auth-mode: ${OCI_AUTH_MODE:auto}
+    config-file-path: ${OCI_CONFIG_FILE_PATH:~/.oci/config}
+    profile: ${OCI_CONFIG_PROFILE:DEFAULT}
+    region: ${OCI_REGION:}
+    compartment-ocid: ${OCI_COMPARTMENT_OCID:}
+    tenancy-ocid: ${OCI_TENANCY_OCID:}
+    billing-enabled: ${OCI_LENS_BILLING_ENABLED:false}
+    network-compartment-ocid: ${OCI_LENS_NETWORK_COMPARTMENT_OCID:}
+    requests-per-day: ${OCI_LENS_REQUESTS_PER_DAY:80}
+    points-per-month: ${OCI_LENS_POINTS_PER_MONTH:100000000}
+  server:
+    metrics-enabled: ${MONITOR_SERVER_METRICS_ENABLED:true}
+    metrics-sample-delay-millis: ${MONITOR_SERVER_METRICS_SAMPLE_DELAY_MILLIS:300000}
+    history-retention-hours: ${MONITOR_SERVER_HISTORY_RETENTION_HOURS:72}
+    proc-path: ${MONITOR_SERVER_PROC_PATH:/host/proc}
+    disk-path: ${MONITOR_SERVER_DISK_PATH:/data}
+  wechat:
+    enabled: ${MONITOR_WECHAT_ENABLED:false}
+    app-id: ${MONITOR_WECHAT_APP_ID:}
+    app-secret: ${MONITOR_WECHAT_APP_SECRET:}
+    template-id: ${MONITOR_WECHAT_TEMPLATE_ID:}
+    cost-template-id: ${MONITOR_WECHAT_COST_TEMPLATE_ID:}
+    open-ids: ${MONITOR_WECHAT_OPEN_IDS:}
+    immediate-push-enabled: ${MONITOR_WECHAT_IMMEDIATE_PUSH_ENABLED:true}
+    daily-summary-enabled: ${MONITOR_WECHAT_DAILY_SUMMARY_ENABLED:false}
+    daily-summary-time: ${MONITOR_WECHAT_DAILY_SUMMARY_TIME:09:00}
+    zone-id: ${MONITOR_WECHAT_ZONE_ID:Asia/Shanghai}
+    detail-page-enabled: ${MONITOR_WECHAT_DETAIL_PAGE_ENABLED:false}
+    detail-page-token-ttl-days: ${MONITOR_WECHAT_DETAIL_PAGE_TOKEN_TTL_DAYS:1}
+    public-url: ${MONITOR_PUBLIC_URL:}
+    api-base-url: ${MONITOR_WECHAT_API_BASE_URL:https://api.weixin.qq.com}
+    settings-encryption-key: ${MONITOR_SETTINGS_ENCRYPTION_KEY:}
+  cors:
+    allowed-origins: ${MONITOR_CORS_ALLOWED_ORIGINS:}

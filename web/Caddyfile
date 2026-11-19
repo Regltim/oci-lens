@@ -1,0 +1,20 @@
+{
+  auto_https off
+  admin off
+}
+
+:8080 {
+  encode zstd gzip
+  handle /api/* {
+    reverse_proxy server:9090
+  }
+  handle {
+    root * /srv
+    header Referrer-Policy "no-referrer"
+    header X-Content-Type-Options "nosniff"
+    @report path /r/*
+    header @report Cache-Control "no-store"
+    try_files {path} /index.html
+    file_server
+  }
+}

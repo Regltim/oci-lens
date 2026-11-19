@@ -6,13 +6,14 @@ fail() { printf '错误：%s\n' "$1" >&2; exit 1; }
 usage() {
   cat <<'HELP'
 用法：bash oci-cloud-shell-setup.sh --tenancy-id OCID --instance-id OCID \
-      --compartment-id OCID [--network-compartment-id OCID] [--with-cost] [--with-volumes] \
+      --compartment-id OCID [--network-compartment-id OCID] [--with-cost] [--with-volumes | --volumes-only] \
       [--allow-tenancy-scope] [--apply]
 
 在租户主区域的 OCI Cloud Shell 中执行。默认仅预览，--apply 创建只读授权。
 --with-cost 增加计费租户的账单读取权限。--with-volumes 单独添加云盘和区域读取策略。主网卡或子网在其他 Compartment 时，
 通过 --network-compartment-id 指定其范围。授权根 Compartment 需要显式添加
---allow-tenancy-scope，因为此时实例和指标权限会覆盖整个租户。
+--allow-tenancy-scope，因为此时所选资源的权限覆盖整个租户。
+--volumes-only 复用已有且只匹配当前实例的动态组，仅补充独立的云盘只读策略。
 HELP
 }
 
@@ -22,6 +23,7 @@ compartment_id=""
 network_compartment_id=""
 with_cost=false
 with_volumes=false
+volumes_only=false
 allow_tenancy_scope=false
 apply=false
 
@@ -38,6 +40,7 @@ while [ "$#" -gt 0 ]; do
       shift 2 ;;
     --with-cost) with_cost=true; shift ;;
     --with-volumes) with_volumes=true; shift ;;
+    --volumes-only) volumes_only=true; with_volumes=true; shift ;;
     --allow-tenancy-scope) allow_tenancy_scope=true; shift ;;
     --apply) apply=true; shift ;;
     --dry-run) apply=false; shift ;;
@@ -49,7 +52,9 @@ done
 is_ocid() { [[ "$2" =~ ^ocid1\.${1}\.[[:alnum:]][[:alnum:]._-]*\.[[:alnum:]][[:alnum:]_-]*$ ]]; }
 is_ocid tenancy "$tenancy_id" || fail "请输入有效的租户 OCID。"
 is_ocid instance "$instance_id" || fail "请输入有效的部署主机实例 OCID。"
-network_compartment_id="${network_compartment_id:-$compartment_id}"
+if "$volumes_only" && { "$with_cost" || [[ -n "$network_compartment_id" ]]; }; then
+  fail "--volumes-only 仅处理云盘权限，请移除 --with-cost 和 --network-compartment-id。"
+fi
 
 scope_for() {
   if [[ "$1" == "$tenancy_id" ]]; then
@@ -62,7 +67,10 @@ scope_for() {
 }
 
 compute_scope="$(scope_for "$compartment_id")"
-network_scope="$(scope_for "$network_compartment_id")"
+network_scope=""
+if ! "$volumes_only"; then
+  network_scope="$(scope_for "${network_compartment_id:-$compartment_id}")"
+fi
 if command -v sha256sum >/dev/null; then
   digest="$(printf '%s' "$instance_id" | sha256sum)"
 else
@@ -108,8 +116,11 @@ volume_statements() {
   printf "Allow %s to inspect tenancies in tenancy where request.operation = 'ListRegionSubscriptions'\n" "$subject"
 }
 
-printf '动态组 %s\n匹配规则 %s\n策略 %s\n' "$group_name" "$matching_rule" "$policy_name"
-statements "dynamic-group $group_name"
+printf '动态组 %s\n匹配规则 %s\n' "$group_name" "$matching_rule"
+if ! "$volumes_only"; then
+  printf '基础策略 %s\n' "$policy_name"
+  statements "dynamic-group $group_name"
+fi
 if "$with_volumes"; then
   printf '云盘策略 %s\n' "$volume_policy_name"
   volume_statements "dynamic-group $group_name"
@@ -128,7 +139,12 @@ lookup() {
 }
 
 group="$(lookup dynamic-group "$group_name")"
-policy="$(lookup policy "$policy_name")"
+policy=null
+if "$volumes_only"; then
+  [[ "$group" != null ]] || fail "找不到已有动态组，请先完成 OCI 实例接入。"
+else
+  policy="$(lookup policy "$policy_name")"
+fi
 
 if [[ "$group" == null ]]; then
   [[ "$policy" == null ]] || fail "发现同名策略，但动态组不存在。请核对已有 IAM 配置。"
@@ -154,14 +170,19 @@ else
 fi
 
 is_ocid dynamicgroup "$group_id" || fail "OCI 未返回有效的动态组 OCID。"
-wanted="$(statements "dynamic-group id $group_id" | jq -Rsc 'split("\n")[:-1]')"
-if [[ "$policy" == null ]]; then
-  oci iam policy create --compartment-id "$tenancy_id" --name "$policy_name" \
-    --description "Read-only access for OCI Lens" --statements "$wanted" \
-    --wait-for-state ACTIVE --wait-interval-seconds 5 --max-wait-seconds 120 >/dev/null
-else
-  jq -e --argjson wanted "$wanted" '."lifecycle-state" == "ACTIVE" and ((.statements | sort) == ($wanted | sort))' <<< "$policy" >/dev/null ||
-    fail "同名策略处于非活跃状态或授权范围不同。请在 IAM 中核对该策略。"
+if ! "$volumes_only"; then
+  wanted="$(statements "dynamic-group id $group_id" | jq -Rsc 'split("\n")[:-1]')"
+  if [[ "$policy" == null ]]; then
+    oci iam policy create --compartment-id "$tenancy_id" --name "$policy_name" \
+      --description "Read-only access for OCI Lens" --statements "$wanted" \
+      --wait-for-state ACTIVE --wait-interval-seconds 5 --max-wait-seconds 120 >/dev/null
+  else
+    policy_state="$(jq -r '."lifecycle-state" // "UNKNOWN"' <<< "$policy")"
+    [[ "$policy_state" == ACTIVE ]] ||
+      fail "已有基础策略 ${policy_name} 的状态为 ${policy_state}，请在 IAM 中核对。仅补云盘时可使用 --volumes-only。"
+    jq -e --argjson wanted "$wanted" '(.statements | sort) == ($wanted | sort)' <<< "$policy" >/dev/null ||
+      fail "已有基础策略 ${policy_name} 的语句与本次请求不一致。仅补云盘时可使用 --volumes-only。"
+  fi
 fi
 
 if "$with_volumes"; then
@@ -177,4 +198,8 @@ if "$with_volumes"; then
   fi
 fi
 
-printf '\n只读授权已配置。IAM 生效后，在 OCI Lens 执行连接检查。\n'
+if "$volumes_only"; then
+  printf '\n云盘只读授权已配置。IAM 生效后，在 OCI Lens 执行同步。\n'
+else
+  printf '\n只读授权已配置。IAM 生效后，在 OCI Lens 执行连接检查。\n'
+fi

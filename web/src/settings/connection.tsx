@@ -7,18 +7,19 @@ import { request, useRead, type OciDiagnostic, type OciStatus } from "../api"
 import { Badge, Panel, SegmentedChoice, State } from "../ui"
 
 type Guide = "instance" | "api"
+type AuthorizationMode = "full" | "volumes"
 const diagnosticLabels: Record<string, string> = { SUCCESS: "通过", FAILED: "失败", WARNING: "需关注", SKIPPED: "已跳过" }
 
-function authorization(data: OciStatus) {
-  const network = data.networkCompartmentId && data.networkCompartmentId !== data.compartmentId ? data.networkCompartmentId : ""
+function authorization(data: OciStatus, mode: AuthorizationMode) {
+  const network = mode === "full" && data.networkCompartmentId && data.networkCompartmentId !== data.compartmentId ? data.networkCompartmentId : ""
   const ids = [data.instanceId, data.tenancyId, data.compartmentId, ...(network ? [network] : [])]
   if (data.authMode !== "instance_principal" || !ids.every(value => /^ocid1\.[a-z]+\.[A-Za-z0-9._-]+$/.test(value))) return null
   const tenancyScope = data.tenancyId === data.compartmentId || data.tenancyId === network
   const args = [`--tenancy-id ${data.tenancyId}`, `--instance-id ${data.instanceId}`, `--compartment-id ${data.compartmentId}`,
     ...(network ? [`--network-compartment-id ${network}`] : []), ...(tenancyScope ? ["--allow-tenancy-scope"] : []),
-    ...(data.costEnabled ? ["--with-cost"] : []), "--with-volumes", "--apply"]
+    ...(mode === "volumes" ? ["--volumes-only"] : [...(data.costEnabled ? ["--with-cost"] : []), "--with-volumes"]), "--apply"]
   const command = ["bash -s --", ...args].join(" \\\n  ") + " <<'OCI_LENS_IAM'"
-  return {command, content: `${command}\n${cloudShellScript.trimEnd()}\nOCI_LENS_IAM\n`, tenancyScope}
+  return {content: `${command}\n${cloudShellScript.trimEnd()}\nOCI_LENS_IAM\n`, tenancyScope}
 }
 
 function ConnectionGuide({guide}: {guide: Guide}) {
@@ -42,16 +43,19 @@ export function ConnectionSettings() {
   const [checking, setChecking] = useState(false)
   const [diagnosticError, setDiagnosticError] = useState("")
   const [copyError, setCopyError] = useState("")
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<AuthorizationMode | null>(null)
   const data = connection.data
   const guide = selectedGuide ?? (data?.authMode === "instance_principal" ? "instance" : "api")
-  const auth = data ? authorization(data) : null
+  const auth = data ? authorization(data, "full") : null
+  const volumeAuth = data ? authorization(data, "volumes") : null
   const status = diagnostic?.overallStatus === "SUCCESS" ? "连接通过" : data?.configured ? "已读取配置" : data ? "本机模式" : "读取配置中"
 
-  async function copy() {
-    if (!auth) return
+  async function copy(mode: AuthorizationMode) {
+    const command = mode === "volumes" ? volumeAuth : auth
+    if (!command) return
     setCopyError("")
-    try {await navigator.clipboard.writeText(auth.content); setCopied(true)}
+    setCopied(null)
+    try {await navigator.clipboard.writeText(command.content); setCopied(mode)}
     catch {setCopyError("剪贴板不可用，请展开完整命令后手动复制。")}
   }
 
@@ -71,12 +75,15 @@ export function ConnectionSettings() {
       </dl> : <div className="settings-callout"><p>本机采样可正常使用。完成 OCI 接入后，可同步云实例、流量和已授权的账单。</p><Link to="/monitor/host">查看本机监控 <ArrowUpRight size={14} aria-hidden="true" /></Link></div>)}
     </Panel>
 
-    {data && (auth ? <Panel title="Cloud Shell 授权" subtitle="在租户主区域执行只读授权，再回来检查连接。">
-      {auth.tenancyScope && <p className="settings-callout">当前范围包含根 Compartment。相应的只读策略覆盖整个租户。</p>}
-      <div className="settings-actions"><Button variant="prominent" onClick={copy}><Copy data-icon="inline-start" />{copied ? "已复制授权命令" : "复制授权命令"}</Button>
+    {data && (auth || volumeAuth ? <Panel title="Cloud Shell 授权" subtitle="在租户主区域执行。已有实例权限时可单独补充云盘权限。">
+      {(auth?.tenancyScope || volumeAuth?.tenancyScope) && <p className="settings-callout">当前范围包含根 Compartment。相应的只读策略覆盖整个租户。</p>}
+      <div className="settings-actions">
+        {auth && <Button variant="prominent" onClick={() => copy("full")}><Copy data-icon="inline-start" />{copied === "full" ? "已复制完整授权命令" : "复制完整授权命令"}</Button>}
+        {volumeAuth && <Button variant="glass" onClick={() => copy("volumes")}><Copy data-icon="inline-start" />{copied === "volumes" ? "已复制云盘授权命令" : "复制云盘授权命令"}</Button>}
         <Button asChild variant="glass"><a href="https://cloud.oracle.com/" target="_blank" rel="noreferrer">打开 OCI 控制台<ArrowUpRight data-icon="inline-end" /></a></Button></div>
       <State error={copyError} />
-      <details className="settings-disclosure"><summary><Terminal size={16} aria-hidden="true" />查看完整命令</summary><div className="shell-preview"><pre><code>{auth.content}</code></pre></div></details>
+      {auth && <details className="settings-disclosure"><summary><Terminal size={16} aria-hidden="true" />查看完整授权命令</summary><div className="shell-preview"><pre><code>{auth.content}</code></pre></div></details>}
+      {volumeAuth && <details className="settings-disclosure"><summary><Terminal size={16} aria-hidden="true" />查看云盘授权命令</summary><div className="shell-preview"><pre><code>{volumeAuth.content}</code></pre></div></details>}
     </Panel> : <Panel title="接入指南" subtitle={data.configured ? "当前配置已读取，可以直接检查连接。" : "按部署方式选择对应步骤。"}>
       {data.configured
         ? <details className="settings-disclosure"><summary>查看配置方法</summary><ConnectionGuide guide={guide} /></details>

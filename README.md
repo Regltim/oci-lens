@@ -47,7 +47,7 @@ bash scripts/oci-lens.sh stop
 
 要监控额外挂载点，在 Compose override 为 `server` 新增只读 bind mount。例如将宿主机 `/mnt/data` 挂载到 `/host/disks/data`，再设置 `MONITOR_SERVER_EXTRA_DISKS=/mnt/data=/host/disks/data`。多个映射以逗号分隔。本机网卡默认采集宿主机带有系统设备的接口，设置 `MONITOR_SERVER_NETWORK_INTERFACE` 可选定一个接口。本机常规采样默认保存 72 小时，可通过 `MONITOR_SERVER_HISTORY_RETENTION_HOURS` 调整。
 
-新生成的 Cloud Shell 命令包含 `--with-volumes`，为现有动态组另建云盘只读策略。使用 API Key 时，请为调用身份配置作用域内的 `inspect volumes` 和 `inspect volume-attachments`，以及执行 `ListAvailabilityDomains` 和 `ListRegionSubscriptions` 所需的只读权限。权限生效后在概览执行一次同步，再打开实例详情查看云盘。现有主策略与当前账单开关的授权不一致时，先在 OCI IAM 核实已有策略。
+完整 Cloud Shell 授权包含云盘只读策略。已有实例权限时，可在「设置 → OCI 接入」使用「复制云盘授权命令」，为现有单实例动态组单独补充云盘权限。使用 API Key 时，请为调用身份配置作用域内的 `inspect volumes` 和 `inspect volume-attachments`，以及执行 `ListAvailabilityDomains` 和 `ListRegionSubscriptions` 所需的只读权限。权限生效后在概览执行一次同步，再打开实例详情查看云盘。现有主策略与当前账单开关的授权不一致时，先在 OCI IAM 核实已有策略。
 
 「用量与费用 → 本月使用」展示本机主网卡按 UTC 日汇总的月度流量与覆盖天数，以及 OCI 的 A1、出站计量和采集范围内的云卷分配量。OCI 的计量使用账单读取开关与 `read usage-report` 权限。主网卡趋势来自 OCI Monitoring。云盘采集使用独立只读权限，读取失败时保留最近的可用数据及失败调用。 [Oracle Free Tier](https://www.oracle.com/cloud/free/) · [Oracle 核心服务 IAM](https://docs.oracle.com/en-us/iaas/Content/Identity/Reference/corepolicyreference.htm)
 

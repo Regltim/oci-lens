@@ -34,6 +34,15 @@ bash scripts/oci-lens.sh migrate-legacy --old-dir /path/to/oci-arm-monitor
 bash scripts/oci-lens.sh migrate-legacy --old-dir /path/to/oci-arm-monitor --apply
 ```
 
+知道旧站数据卷名时可直接使用 `--old-volume`。例如旧库位于 Docker 卷 `oci-arm-monitor_oci-arm-monitor-data`，使用以下两条命令先预检、再按需要导入：
+
+```sh
+bash scripts/oci-lens.sh migrate-legacy --old-volume oci-arm-monitor_oci-arm-monitor-data
+bash scripts/oci-lens.sh migrate-legacy --old-volume oci-arm-monitor_oci-arm-monitor-data --apply
+```
+
+按目录定位时，脚本优先读取已有旧容器的实际挂载信息。按卷迁移也适用于旧容器已删、旧 Compose 配置已失效的情况。
+
 预检读取两边 SQLite 的一致性快照，两站可以继续运行。应用时脚本暂时停止新站后端，迁移完成或失败后恢复原运行状态。也可附加 `--manual-only` 或 `--host-only --host-label 原主机名`。导入结果和备份路径会显示在终端。
 
 ### 手动执行 Compose 迁移

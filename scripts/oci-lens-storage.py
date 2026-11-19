@@ -13,30 +13,52 @@ import tempfile
 import time
 
 
-def compose_mount(service_name, default_database):
-    config = json.load(sys.stdin)
-    service = config["services"][service_name]
-    mounts = [mount for mount in service.get("volumes", []) if mount["target"] == "/data"]
-    if len(mounts) != 1:
+def data_mount(mounts):
+    matches = [mount for mount in mounts if mount["target"] == "/data"]
+    if len(matches) != 1:
         raise ValueError("服务必须有一个 /data 挂载。")
-    mount = mounts[0]
-    kind = mount["type"]
-    if kind == "volume":
-        source = config["volumes"][mount["source"]]["name"]
-    elif kind == "bind":
-        source = str(Path(mount["source"]).resolve())
-    else:
+    return matches[0]
+
+
+def print_storage(kind, source, database, image, secret=""):
+    if not source:
+        raise ValueError("/data 挂载缺少来源。")
+    if kind == "bind":
+        source = str(Path(source).resolve())
+    elif kind != "volume":
         raise ValueError("/data 需要使用 Docker 数据卷或宿主机目录。")
-    database = PurePosixPath((service.get("environment") or {}).get("OCI_MONITOR_DB") or default_database)
-    if database.parent != PurePosixPath("/data") or not database.name:
+    database = PurePosixPath(database)
+    if database.parent != PurePosixPath("/data") or database.name in ("", ".", ".."):
         raise ValueError("SQLite 数据库应直接位于 /data 下。")
-    secret = config.get("secrets", {}).get("admin_password", {}).get("file", "")
-    if secret:
-        secret = str(Path(secret).resolve())
-    fields = (kind, source, str(database), service.get("image") or f"{config['name']}-{service_name}", secret)
+    fields = (kind, source, str(database), image, secret)
     if any(any(character in value for character in "|\r\n") for value in fields) or "," in source:
         raise ValueError("部署路径包含 Docker 挂载或运维脚本不支持的分隔符。")
     print("|".join(fields))
+
+
+def compose_mount(service_name, default_database):
+    config = json.load(sys.stdin)
+    service = config["services"][service_name]
+    mount = data_mount(service.get("volumes", []))
+    kind = mount["type"]
+    source = config["volumes"][mount["source"]]["name"] if kind == "volume" else mount.get("source", "")
+    database = (service.get("environment") or {}).get("OCI_MONITOR_DB") or default_database
+    secret = config.get("secrets", {}).get("admin_password", {}).get("file", "")
+    if secret:
+        secret = str(Path(secret).resolve())
+    image = service.get("image") or f"{config['name']}-{service_name}"
+    print_storage(kind, source, database, image, secret)
+
+
+def container_mount(default_database):
+    container = json.load(sys.stdin)
+    mount = data_mount([
+        {"target": mount["Destination"], "type": mount["Type"],
+         "source": mount.get("Name") if mount["Type"] == "volume" else mount.get("Source")}
+        for mount in container["mounts"]
+    ])
+    environment = dict(item.split("=", 1) for item in (container["environment"] or []) if "=" in item)
+    print_storage(mount["type"], mount["source"], environment.get("OCI_MONITOR_DB") or default_database, container["image"])
 
 
 @contextmanager
@@ -108,6 +130,7 @@ def main():
     mount = commands.add_parser("compose-mount")
     mount.add_argument("service")
     mount.add_argument("default_database")
+    commands.add_parser("container-mount").add_argument("default_database")
     for command in ("inspect", "backup"):
         operation = commands.add_parser(command)
         operation.add_argument("--offline", action="store_true")
@@ -116,6 +139,8 @@ def main():
     try:
         if args.command == "compose-mount":
             compose_mount(args.service, args.default_database)
+        elif args.command == "container-mount":
+            container_mount(args.default_database)
         elif args.command == "inspect":
             inspect(args.database, args.offline)
         else:

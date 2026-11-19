@@ -7,6 +7,8 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 storage_helper="$root/scripts/oci-lens-storage.py"
 target_db=/data/oci-lens.db
 legacy_db=/data/oci-arm-cost-monitor.db
+legacy_service=oci-arm-monitor-server
+legacy_image=oci-arm-cost-monitor-server:latest
 helper_image=python:3.12-alpine
 wait_seconds=180
 lock_path="$root/.runtime/oci-lens-ops.lock"
@@ -26,7 +28,7 @@ usage() {
   logs [server|web]                   查看最近 100 行日志
   doctor                              检查 Docker、配置与数据挂载
   backup                              备份现有 SQLite 到 backups/
-  migrate-legacy --old-dir 目录 [--apply] [--host-label 标签]
+  migrate-legacy (--old-dir 目录 | --old-volume 卷名) [--apply] [--host-label 标签]
                 [--manual-only | --host-only]
                                       默认只预检旧 OCI ARM Monitor 数据
   reset-password [--username 当前账号名] [--generate]
@@ -39,7 +41,15 @@ fail() { printf '错误：%s\n' "$1" >&2; exit 1; }
 compose_in() {
   local directory=$1
   shift
-  docker compose --project-directory "$directory" "$@"
+  if [[ "$directory" == "$root" ]]; then
+    docker compose --project-directory "$directory" "$@"
+  else
+    (
+      cd "$directory"
+      unset COMPOSE_FILE COMPOSE_PROJECT_NAME COMPOSE_ENV_FILES
+      docker compose --project-directory "$directory" "$@"
+    )
+  fi
 }
 
 compose() { compose_in "$root" "$@"; }
@@ -75,10 +85,10 @@ require_docker() {
 }
 
 select_storage() {
-  local directory=$1 service=$2 default_database=$3 model actual
+  local directory=$1 service=$2 default_database=$3 config model actual
   command -v python3 >/dev/null || fail "需要 Python 3 读取 Compose 的 SQLite 挂载配置。"
-  model=$(compose_in "$directory" config --format json |
-    python3 "$storage_helper" compose-mount "$service" "$default_database") ||
+  config=$(compose_in "$directory" config --format json) || fail "无法读取 $service 的 Compose 配置。"
+  model=$(python3 "$storage_helper" compose-mount "$service" "$default_database" <<< "$config") ||
     fail "无法解析 $service 的数据挂载。"
   IFS='|' read -r storage_type storage_source storage_db storage_image storage_secret <<< "$model"
   storage_container=$(compose_in "$directory" ps -a -q "$service") || fail "无法定位 $service 容器。"
@@ -91,6 +101,53 @@ select_storage() {
     storage_image=$(docker inspect --format '{{.Image}}' "$storage_container")
   fi
   storage_mount="type=$storage_type,source=$storage_source,target=/data"
+}
+
+select_legacy_storage() {
+  local old_dir=$1 old_volume=$2 container model
+  if [[ -n "$old_volume" ]]; then
+    container=$(docker ps -aq --filter "label=com.docker.compose.service=$legacy_service" --filter "volume=$old_volume") ||
+      fail "无法查询旧站数据卷关联的容器。"
+  else
+    container=$(docker ps -aq --filter "label=com.docker.compose.service=$legacy_service" \
+      --filter "label=com.docker.compose.project.working_dir=$old_dir") ||
+      fail "无法查询旧站 Compose 容器。"
+  fi
+  [[ "$container" != *$'\n'* ]] || fail "旧站来源匹配多个容器，请核对 --old-dir 或数据卷。"
+
+  if [[ -n "$container" ]]; then
+    local metadata
+    metadata=$(docker inspect --format '{"mounts":{{json .Mounts}},"environment":{{json .Config.Env}},"image":{{json .Image}}}' "$container") ||
+      fail "无法读取旧站容器挂载。"
+    model=$(python3 "$storage_helper" container-mount "$legacy_db" <<< "$metadata") ||
+      fail "无法解析旧站容器的数据库挂载。"
+    IFS='|' read -r storage_type storage_source storage_db storage_image storage_secret <<< "$model"
+    if [[ -n "$old_volume" && "$storage_type|$storage_source" != "volume|$old_volume" ]]; then
+      fail "指定的旧站数据卷未挂载到容器 /data。"
+    fi
+    storage_container=$container
+  elif [[ -n "$old_volume" ]]; then
+    storage_type=volume
+    storage_source=$old_volume
+    storage_db=$legacy_db
+    storage_image=$legacy_image
+    storage_container=
+    storage_secret=
+  else
+    select_storage "$old_dir" "$legacy_service" "$legacy_db"
+    return
+  fi
+  storage_mount="type=$storage_type,source=$storage_source,target=/data"
+}
+
+storage_in_use() {
+  if [[ "$storage_type" == volume ]]; then
+    local running
+    running=$(docker ps -q --filter "volume=$storage_source") || fail "无法检查数据卷的运行状态。"
+    [[ -n "$running" ]]
+  else
+    storage_running
+  fi
 }
 
 storage_exists() {
@@ -116,7 +173,7 @@ storage_uid() {
 }
 
 sqlite_helper() {
-  if ! storage_running; then set -- "$@" --offline; fi
+  if ! storage_in_use; then set -- "$@" --offline; fi
   docker run --rm --network none --user "$storage_user" \
     --mount "$storage_mount,readonly" \
     --mount "type=bind,source=$storage_helper,target=/maintenance.py,readonly" \
@@ -238,12 +295,16 @@ reset_password() {
 }
 
 migrate_legacy() {
-  local old_dir= apply=false host_label='旧站主机' subset= target_mount
+  local old_dir= old_volume= apply=false host_label='旧站主机' subset= target_mount
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --old-dir|--host-label)
+      --old-dir|--old-volume|--host-label)
         [[ $# -ge 2 && -n "$2" ]] || fail "$1 需要参数。"
-        if [[ "$1" == --old-dir ]]; then old_dir=$2; else host_label=$2; fi
+        case "$1" in
+          --old-dir) old_dir=$2 ;;
+          --old-volume) old_volume=$2 ;;
+          --host-label) host_label=$2 ;;
+        esac
         shift 2 ;;
       --apply) apply=true; shift ;;
       --manual-only|--host-only)
@@ -252,13 +313,18 @@ migrate_legacy() {
       *) fail "migrate-legacy 的选项无效，请查看 --help。" ;;
     esac
   done
-  [[ -n "$old_dir" && -d "$old_dir" ]] || fail "请通过 --old-dir 指定旧站 Compose 目录。"
-  old_dir=$(cd "$old_dir" && pwd -P)
+  if [[ -n "$old_volume" ]]; then
+    [[ -z "$old_dir" ]] || fail "--old-dir 与 --old-volume 只能选择一个。"
+    [[ "$old_volume" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || fail "旧站 Docker 数据卷名称无效。"
+  else
+    [[ -n "$old_dir" && -d "$old_dir" ]] || fail "请指定旧站 --old-dir 或 --old-volume。"
+    old_dir=$(cd "$old_dir" && pwd -L)
+  fi
   target_storage
   storage_exists || fail "请先启动新版 OCI Lens，初始化目标数据库。"
   target_mount=$storage_mount
 
-  select_storage "$old_dir" oci-arm-monitor-server "$legacy_db"
+  select_legacy_storage "$old_dir" "$old_volume"
   storage_exists || fail "找不到旧站 SQLite 数据卷。"
   [[ "$storage_mount" != "$target_mount" ]] || fail "新旧项目不能使用同一个数据挂载。"
   storage_uid
@@ -282,7 +348,7 @@ run_import() {
   shift
   if [[ "$mode" == readonly ]]; then
     mount_options="$mount_options,readonly"
-    if ! storage_running; then offline=--offline; fi
+    if ! storage_in_use; then offline=--offline; fi
   fi
   docker run --rm -i --network none --user "$storage_user" \
     --mount "$mount_options" \

@@ -37,8 +37,10 @@ export function SegmentedChoice<T extends string | number>({ label, options, val
   </fieldset>
 }
 
-export function Badge({ children, ready = false }: { children: ReactNode; ready?: boolean }) {
-  return <span className={`tag ${ready ? "green" : ""}`}>{ready && <i className="status-dot" />}{children}</span>
+export function Badge({ children, ready = false, warning = false }: { children: ReactNode; ready?: boolean; warning?: boolean }) {
+  return <span className={`tag ${warning ? "amber" : ready ? "green" : ""}`}>
+    {(warning || ready) && <i className="status-dot" aria-hidden="true" />}{children}
+  </span>
 }
 
 export function Metric({ label, value, unit, note, to }: { label: string; value: string; unit?: string; note?: string; to?: string }) {

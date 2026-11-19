@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { Link } from "react-router-dom"
 import { ArrowRight, RefreshCw } from "lucide-react"
 import { Button } from "@/components/glass/button"
+import { ScrollRegion } from "@/components/glass/scroll-region"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/glass/table"
 import { request, useRead, type Choice, type CoverageDay, type HostSummary, type HostHistoryPoint, type InstanceOverview, type SyncRun, type SyncSchedule, type SyncStatus, type TrafficDay } from "./api"
 import { QuotaPanel } from "./quota"
@@ -20,7 +21,7 @@ export function trafficDays(rows: TrafficDay[], coverage: CoverageDay[] = []) {
   return [...days].sort(([a], [b]) => a.localeCompare(b))
 }
 
-const statuses: Record<string, string> = { SUCCESS: "已完成", SUCCEEDED: "已完成", RUNNING: "同步中", FAILED: "失败", PARTIAL: "部分完成", PAUSED: "额度暂停", INTERRUPTED: "已中断", NOT_CONFIGURED: "本机模式", NEVER_SYNCED: "等待首次同步" }
+const statuses: Record<string, string> = { SUCCESS: "已完成", SUCCEEDED: "已完成", RUNNING: "同步中", FAILED: "失败", PARTIAL: "部分完成", PAUSED: "采集暂停", INTERRUPTED: "已中断", NOT_CONFIGURED: "本机模式", NEVER_SYNCED: "等待首次同步" }
 export function syncLabel(status: string) { return statuses[status] ?? status }
 
 const instanceStates: Record<string, string> = { RUNNING: "运行中", STOPPED: "已停止", STARTING: "启动中", STOPPING: "停止中", PROVISIONING: "配置中", TERMINATING: "终止中", TERMINATED: "已终止", CREATING_IMAGE: "制作镜像" }
@@ -60,38 +61,48 @@ export function Overview() {
     catch (failure) {setError((failure as Error).message)} finally {setWorking(false)}
   }
   const cloud = sync.data?.configured
+  const status = sync.data?.lastStatus ?? ""
+  const paused = cloud && status === "PAUSED"
   const last = sync.data?.lastSuccessfulAt || (sync.data?.lastStatus === "SUCCESS" ? sync.data.lastFinishedAt : "")
   const stale = last && Date.now() - Date.parse(last) > 172_800_000
   const trend = days === 1 ? host : history
   const points = days === 1 ? host.data?.history : history.data
   const alerts = host.data?.alerts ?? []
+  const attention = [...alerts, ...(changes.data ?? [])]
+  const syncStatusLabel = !sync.data ? "读取中" : !cloud ? "本机模式" : paused ? "采集额度已达上限" : syncLabel(status)
   return <>
     <Heading title="运行总览" actions={cloud
       ? <Button variant="prominent" size="lg" disabled={active || working} onClick={run}><RefreshCw data-icon="inline-start" />{active || working ? "同步中" : "立即同步"}</Button>
       : <Button asChild variant="prominent" size="lg"><Link to="/settings/oci">接入 OCI<ArrowRight data-icon="inline-end" /></Link></Button>} />
-    <State error={error || sync.error} retry={sync.error ? sync.retry : undefined} />
-    {sync.data && ["FAILED", "PARTIAL", "PAUSED"].includes(sync.data.lastStatus) && <State empty={sync.data.lastMessage} />}
+    <div className="overview-grid">
+      <QuotaPanel compact revision={revision} />
+      <Panel title="OCI 同步" className="sync-panel"
+        actions={<Badge ready={Boolean(cloud && status === "SUCCESS" && last && !stale)} warning={paused}>{syncStatusLabel}</Badge>}>
+        <dl className="sync-times">
+          <div><dt>最近成功</dt><dd>{last ? formatTime(last) : "—"}{stale && <span>数据较旧</span>}</dd></div>
+          <div><dt>下次同步</dt><dd>{cloud && schedule.data?.enabled && schedule.data.nextRunAt ? formatTime(schedule.data.nextRunAt) : "—"}</dd></div>
+        </dl>
+        <State error={error || sync.error} retry={sync.error ? sync.retry : undefined} />
+        {paused && <div className="sync-budget-note" role="status">
+          <strong>应用的 OCI 读取达到用量上限</strong>
+          <p>每日请求次数或每月监控采样点额度不足，已保留此前成功采集的数据。</p>
+        </div>}
+        {["FAILED", "PARTIAL"].includes(status) && <State empty={sync.data?.lastMessage} />}
+        <Link to="/sync" className="panel-link sync-records-link">同步记录 <ArrowRight size={15} aria-hidden="true" /></Link>
+      </Panel>
+    </div>
     <Panel title="本机资源趋势" className="block-panel host-trend-panel"
       subtitle={days === 30 ? "UTC 日均采样" : host.data?.current ? `最近采样 ${formatTime(host.data.current.sampledAt)}` : "按采样时间展示"}
       actions={<SegmentedChoice label="资源时间范围" options={[{value:1,label:"24 小时"}, {value:7,label:"7 天"}, {value:30,label:"30 天"}]} value={days} onChange={setDays} />}>
       <State error={trend.error} retry={trend.retry} pending={trend.pending && !points} />
       {points && <HostTrend points={points} daily={days === 30} />}
     </Panel>
-    <div className="overview-grid">
-      <QuotaPanel compact revision={revision} />
-      <aside className="overview-sidebar">
-        <Panel title="OCI 同步" className="sync-panel" actions={<Badge ready={Boolean(sync.data && last && !stale)}>{sync.data ? cloud ? syncLabel(sync.data.lastStatus) : "本机模式" : "读取中"}</Badge>}>
-          <dl className="sync-times">
-            <div><dt>最近成功</dt><dd>{last ? formatTime(last) : "—"}{stale && <span>数据较旧</span>}</dd></div>
-            <div><dt>下次同步</dt><dd>{cloud && schedule.data?.enabled && schedule.data.nextRunAt ? formatTime(schedule.data.nextRunAt) : "—"}</dd></div>
-          </dl>
-          <Link to="/sync" className="panel-link">同步记录 <ArrowRight size={15} /></Link>
-        </Panel>
-        {Boolean(alerts.length || changes.data?.length) && <Panel title="需要关注" className="change-panel">
-          <div className="change-list">{[...alerts, ...(changes.data ?? [])].map((item, index) => <div className="change-row" key={`${item.title}-${index}`}><strong>{item.title}</strong><small>{item.description}</small></div>)}</div>
-        </Panel>}
-      </aside>
-    </div>
+    <Runs preview revision={revision} polling={active} />
+    {attention.length > 0 && <Panel title="需要关注" className="change-panel">
+      <ScrollRegion label="需要关注" className="overview-attention-list">
+        <div className="change-list">{attention.map((item, index) => <div className="change-row" key={`${item.title}-${index}`}><strong>{item.title}</strong><small>{item.description}</small></div>)}</div>
+      </ScrollRegion>
+    </Panel>}
   </>
 }
 
@@ -106,13 +117,32 @@ export function InstanceTable({instances}: {instances: InstanceOverview[]}) {
   </TableBody></Table>
 }
 
-export function Runs() {
-  const runs = useRead<SyncRun[]>("/sync/history")
-  const active = runs.data?.some(run => run.status === "RUNNING")
+const syncTasks: Record<string, string> = { BACKFILL: "历史补采", SCHEDULED: "每日同步" }
+
+export function Runs({preview = false, revision = 0, polling = false}: {preview?: boolean; revision?: number; polling?: boolean} = {}) {
+  const runs = useRead<SyncRun[]>("/sync/history", revision)
+  const active = polling || runs.data?.some(run => run.status === "RUNNING")
   useEffect(() => {if (!active) return; const timer = window.setInterval(runs.retry, 2000); return () => window.clearInterval(timer)}, [active, runs.retry])
+  const records = <>
+    <State error={runs.error} retry={runs.retry} pending={runs.pending && !runs.data} empty={runs.data?.length === 0 ? "尚无同步记录。" : undefined} />
+    {Boolean(runs.data?.length) && <Table className="sync-records-table" aria-label="同步记录">
+      <TableHeader><TableRow><TableHead>同步时间</TableHead><TableHead>任务</TableHead><TableHead>状态</TableHead></TableRow></TableHeader>
+      <TableBody>{runs.data?.map(run => <TableRow key={run.id}>
+        <TableCell><time dateTime={run.startedAt}>{formatTime(run.startedAt)}</time></TableCell>
+        <TableCell>
+          <details className="run-details">
+            <summary>{syncTasks[run.syncType] ?? "手动同步"}</summary>
+            {run.message && <p>{run.message}</p>}
+            <p>实例 {run.instanceCount} · 指标 {run.metricCount} · 流量 {run.trafficCount} · 费用 {run.costCount}</p>
+          </details>
+        </TableCell>
+        <TableCell><Badge ready={run.status === "SUCCESS"} warning={run.status === "PAUSED"}>{syncLabel(run.status)}</Badge></TableCell>
+      </TableRow>)}</TableBody>
+    </Table>}
+  </>
+  if (preview) return <Panel title="同步记录" className="block-panel sync-records-preview"
+    actions={<Link to="/sync" className="panel-link">查看记录 <ArrowRight size={15} aria-hidden="true" /></Link>}>{records}</Panel>
   return <><Heading title="同步记录" subtitle="云端读取任务与历史补采" actions={<Button onClick={runs.retry} variant="glass">刷新</Button>} />
-    <Panel><State error={runs.error} retry={runs.retry} pending={runs.pending} empty={runs.data?.length === 0 ? "尚无同步记录。" : undefined} />
-      {runs.data?.length ? <div className="change-list">{runs.data.map(run => <details key={run.id} className="run-row"><summary><Badge ready={run.status === "SUCCESS"}>{syncLabel(run.status)}</Badge><span>{formatTime(run.startedAt)}</span><span>{run.syncType === "BACKFILL" ? "历史补采" : run.syncType === "SCHEDULED" ? "每日同步" : "手动同步"}</span></summary><p>{run.message}</p><p>实例 {run.instanceCount} · 指标 {run.metricCount} · 流量 {run.trafficCount} · 费用 {run.costCount}</p></details>)}</div> : null}
-    </Panel>
+    <Panel>{records}</Panel>
   </>
 }

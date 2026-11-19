@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { cn } from "@/lib/glass-cn"
+import { ScrollRegion } from "./scroll-region"
 
 /**
  * shadcn's Table on glass. It has no pane of its own — put it inside a Card:
@@ -13,34 +14,14 @@ import { cn } from "@/lib/glass-cn"
  *     <TableBody><TableRow><TableCell>Monday</TableCell><TableCell numeric>20</TableCell></TableRow></TableBody>
  *   </Table>
  *
- * When the table is wider than its container, the scroll container becomes a
- * focusable, named region so keyboard users can scroll it.
+ * When the table overflows in either direction, the scroll container becomes
+ * a focusable, named region so keyboard users can scroll it.
  */
 function Table({ className, containerClassName, ...props }: React.ComponentProps<"table"> & { /** Classes for the scroll container (e.g. a max height for a sticky header). */ containerClassName?: string }) {
-  const ref = React.useRef<HTMLDivElement>(null)
-  const [overflowing, setOverflowing] = React.useState(false)
-  React.useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    const measure = () => setOverflowing(el.scrollWidth > el.clientWidth + 1)
-    measure()
-    const observer = new ResizeObserver(measure)
-    observer.observe(el)
-    if (el.firstElementChild) observer.observe(el.firstElementChild)
-    return () => observer.disconnect()
-  }, [])
   return (
-    <div
-      ref={ref}
-      data-slot="table-container"
-      data-overflowing={overflowing || undefined}
-      role={overflowing ? "region" : undefined}
-      tabIndex={overflowing ? 0 : undefined}
-      aria-label={overflowing ? (props["aria-label"] ?? "Table") : undefined}
-      className={cn("glass-focus relative w-full overflow-x-auto", containerClassName)}
-    >
+    <ScrollRegion data-slot="table-container" label={props["aria-label"] ?? "数据表格"} className={containerClassName}>
       <table data-slot="table" className={cn("w-full caption-bottom text-sm numeric-glass", className)} {...props} />
-    </div>
+    </ScrollRegion>
   )
 }
 

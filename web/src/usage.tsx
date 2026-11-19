@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react"
 import { Navigate, Route, Routes, useSearchParams } from "react-router-dom"
 import { Button } from "@/components/glass/button"
+import { ScrollRegion } from "@/components/glass/scroll-region"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/glass/table"
 import { query, request, useRead, type Budget, type CostSummary, type CoverageDay, type InstanceOverview, type ManualCost, type TrafficSummary } from "./api"
 import { trafficDays } from "./overview"
@@ -27,8 +28,10 @@ function Coverage({ rows, source, reload }: { rows: CoverageDay[]; source: "traf
   }
   return <Panel title="数据覆盖" className="block-panel">
     <State error={error} empty={notice} />
-    <div className="change-list">{gaps.slice(-10).reverse().map(row => <div className="coverage-row" key={row.statDate}><span>{row.statDate}</span><span>{row.message || (row.status === "PENDING" ? "待核对" : "缺少采样")}</span>
-      {row.status === "GAP" && <Button variant="link" disabled={busy} onClick={() => repair(row.statDate)}>补采这一天</Button>}</div>)}</div>
+    <ScrollRegion label="待补采日期">
+      <div className="change-list">{gaps.slice(-10).reverse().map(row => <div className="coverage-row" key={row.statDate}><span>{row.statDate}</span><span>{row.message || (row.status === "PENDING" ? "待核对" : "缺少采样")}</span>
+        {row.status === "GAP" && <Button variant="link" disabled={busy} onClick={() => repair(row.statDate)}>补采这一天</Button>}</div>)}</div>
+    </ScrollRegion>
   </Panel>
 }
 
@@ -118,7 +121,7 @@ function ManualEntries({rows, month, reload}: {rows: ManualCost[]; month: string
     catch (failure) {setError((failure as Error).message)} finally {setBusy(false)}
   }
   return <Panel title="手工费用" className="block-panel">
-    {rows.length > 0 && <div className="change-list">{rows.map(row => <div key={row.id}>
+    {rows.length > 0 && <ScrollRegion label="手工费用列表"><div className="change-list">{rows.map(row => <div key={row.id}>
       <div className="coverage-row"><span className="usage-cost-name">{row.costName} · {row.occurredOn}</span><strong>{money(row.amount,row.currency)}</strong>
         <Button variant="link" disabled={busy} onClick={() => {setEntry(row); setRemoving(null); setNotice(""); setError("")}}>编辑</Button>
         <Button variant="link" disabled={busy} aria-expanded={removing === row.id} onClick={() => {setRemoving(row.id); setNotice(""); setError("")}}>删除</Button>
@@ -130,7 +133,7 @@ function ManualEntries({rows, month, reload}: {rows: ManualCost[]; month: string
           <Button variant="destructive" disabled={busy} onClick={() => remove(row)}>{busy ? "删除中…" : "确认删除"}</Button>
         </div>
       </div>}
-    </div>)}</div>}
+    </div>)}</div></ScrollRegion>}
     <form key={entry?.id ?? "new"} onSubmit={save} onChange={() => {if (notice) setNotice("")}}>
       <fieldset className="filter-row usage-entry-fields" disabled={busy}>
         <label>名称<input name="costName" defaultValue={entry?.costName} required maxLength={100} /></label>
@@ -169,7 +172,7 @@ function Costs() {
       </div>
       <State pending={costs.pending} error={costs.error} retry={costs.retry} empty={costs.data && !rows.length ? "当前没有已入账明细。" : undefined} />
       {perCurrency.size > 0 && <div className="metric-grid">{[...perCurrency].map(([key,value]) => <Metric key={key} label={`已入账 · ${key}`} value={formatNumber(value, 2)} unit={key} />)}</div>}
-      {rows.length > 0 && <Table className="usage-data-table usage-billing-table" aria-label="OCI 账单明细"><TableHeader><TableRow><TableHead>UTC 日期</TableHead><TableHead>服务</TableHead><TableHead numeric>费用</TableHead></TableRow></TableHeader><TableBody>
+      {rows.length > 0 && <Table key={`${month}/${selected}/${page}`} className="usage-data-table usage-billing-table" aria-label="OCI 账单明细"><TableHeader><TableRow><TableHead>UTC 日期</TableHead><TableHead>服务</TableHead><TableHead numeric>费用</TableHead></TableRow></TableHeader><TableBody>
         {rows.slice((page - 1) * pageSize, page * pageSize).map((row,index) => <TableRow key={`${row.statDate}-${index}`}><TableCell>{row.statDate}</TableCell><TableCell>{row.serviceName || "未归属"}</TableCell><TableCell numeric>{money(row.costAmount,row.currency)}</TableCell></TableRow>)}
       </TableBody></Table>}
       {pageCount > 1 && <div className="filter-row">

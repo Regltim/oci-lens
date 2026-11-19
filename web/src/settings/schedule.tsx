@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react"
 import { Link } from "react-router-dom"
 import { ArrowUpRight, Plus } from "lucide-react"
 import { Button } from "@/components/glass/button"
+import { ScrollRegion } from "@/components/glass/scroll-region"
 import { request, useRead, type MaintenanceWindow, type OciStatus, type SyncSchedule } from "../api"
 import { Badge, Panel, State, formatTime } from "../ui"
 import { FormFeedback, SettingSwitch } from "./form"
@@ -79,7 +80,7 @@ function Maintenance() {
   return <Panel title="维护窗口" subtitle="窗口内暂停即时告警推送，采样继续运行。" actions={editing ? undefined : <Button variant="glass" onClick={() => {setEditing(true); setConfirming(null); setError(""); setNotice("")}}><Plus data-icon="inline-start" />添加窗口</Button>}>
     <State pending={windows.pending && !windows.data} error={windows.error} retry={windows.retry} />
     {windows.data?.length === 0 && !editing && <p className="settings-meta">暂无维护窗口。</p>}
-    {windows.data && windows.data.length > 0 && <ul className="diagnostic-list">{windows.data.map(item => {
+    {windows.data && windows.data.length > 0 && <ScrollRegion label="维护窗口列表"><ul className="diagnostic-list">{windows.data.map(item => {
       const planned = Date.parse(item.startsAt) > now
       const cancelled = item.startsAt === item.endsAt
       const ended = Date.parse(item.endsAt) <= now
@@ -90,7 +91,7 @@ function Maintenance() {
           {!cancelled && !ended && confirming !== item.id && <Button variant="link" disabled={busy || editing} onClick={() => {setConfirming(item.id); setError(""); setNotice("")}}>{planned ? "取消窗口" : "提前结束"}</Button>}</div>
         {confirming === item.id && <div className="settings-confirm"><p>{planned ? "取消后这个窗口将不会启动。" : "结束后恢复即时告警推送。"}</p><div className="settings-actions"><Button variant="glass" disabled={busy} onClick={() => setConfirming(null)}>返回</Button><Button variant="destructive" disabled={busy} onClick={() => end(item.id, planned)}>{planned ? "确认取消" : "确认结束"}</Button></div></div>}
       </li>
-    })}</ul>}
+    })}</ul></ScrollRegion>}
     {editing && <form className="settings-form maintenance-form" onSubmit={add}>
       <div className="settings-fields"><label>维护原因<input name="reason" maxLength={120} required disabled={busy} /></label></div>
       <div className="settings-fields settings-fields-pair"><label>开始时间<input name="startsAt" type="datetime-local" required disabled={busy} /></label><label>结束时间<input name="endsAt" type="datetime-local" required disabled={busy} /></label></div>
